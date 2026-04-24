@@ -1,0 +1,9 @@
+project:
+  output-dir: _docs
+
+website:
+  title: "gheasy"
+  site-url: "https://vedicreader.github.io/gheasy"
+  description: "github made easy"
+  repo-branch: main
+  repo-url: "https://github.com/vedicreader/gheasy"

@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gheasy"
+dynamic = ["version"]
+description = "github made easy"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [{name = "Karthik", email = "karthik.rajgopal@hotmail.com"}]
+keywords = ['nbdev']
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "ghapi>=1.0.13",
+    "tomlkit>=0.14.0",
+    "cyclopts>=0.23",
+    "pyyaml>=6.0",
+    "ruamel-yaml>=0.18",
+]
+
+[project.urls]
+Repository = "https://github.com/vedicreader/gheasy"
+Documentation = "https://vedicreader.github.io/gheasy/"
+
+[project.entry-points.nbdev]
+gheasy = "gheasy._modidx:d"
+
+[project.scripts]
+gheasy = "gheasy.core:main"
+
+[tool.hatch.version]
+path = "gheasy/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["gheasy"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/gheasy",
+    "/README.md",
+    "/pyproject.toml",
+]
+
+[tool.nbdev]
+
+[dependency-groups]
+dev = [
+    "cfeasy>=0.0.2",
+    "dockeasy>=0.0.3",
+    "fastaistyle>=0.0.15",
+    "koshas>=0.0.6",
+    "nbdev>=3.0.12",
+    "notebook>=7.5.5",
+    "pytest>=9.0.2",
+    "vpseasy>=0.0.1",
+]
