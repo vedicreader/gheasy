@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any
 from ghapi.all import GhApi
-from fastcore.all import store_attr, patch, filter_values, true, Path, filter_keys, in_, L, listify, not_, is_
+from fastcore.all import patch, filter_values, Path, filter_keys, in_, L, listify, not_, is_
 from .workflow import Workflow, JobBuilder, StepBuilder
 
 # %% auto #0
@@ -19,7 +19,7 @@ __all__ = ['FINDING_BRANCH_PROTECTION', 'FINDING_DEPENDABOT', 'FINDING_TOPICS', 
            'gh_githooks_pre_commit', 'gh_lfs', 'gh_gitattributes', 'gh_protect', 'gh_topics', 'gh_secret',
            'gh_push_env', 'gh_secrets_from_file', 'gh_deploy_key_setup', 'gh_init', 'gh_add_env', 'gh_add_job',
            'gh_workflow', 'gh_status', 'gh_ship', 'gh_record_deploy', 'gh_setup', 'RepoFinding', 'gh_check', 'gh_apply',
-           'GheasyRepo', 'gh_pyproject_to_hatchling', 'main']
+           'GheasyRepo', 'gh_pyproject_to_hatchling', 'repo_root', 'mv_skill_md', 'main']
 
 # %% ../nbs/00_core.ipynb #11v4pz14mo9k
 @dataclass
@@ -629,6 +629,24 @@ def gh_pyproject_to_hatchling(path='.', dry_run=False):
         return
     changed = _migrate_pyproject_to_hatchling(path)
     print('Migrated to hatchling.' if changed else 'Already using hatchling (no changes).')
+
+# %% ../nbs/00_core.ipynb #e0d36858
+def repo_root(path='.'):
+    "Walk up from `path` to find the git repo root; fall back to `path`."
+    p = Path(path).resolve()
+    from fastcore.basics import first
+    return first((p, *p.parents), lambda d: (d/'.git').exists()) or p
+
+def mv_skill_md(dry_run=True, path='.'):
+    "Copy bundled SKILL.md into .claude/skills/gheasy/ and .agents/skills/gheasy/."
+    base = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+    if not (src := base/'SKILL.md').exists(): return
+    root = repo_root(path)
+    ts = [root/'.agents/skills/gheasy/SKILL.md', root/'.claude/skills/gheasy/SKILL.md']
+    if dry_run: print(f'Would copy {src} to: {list(map(str,ts))}')
+    else:
+        for p in ts: p.mk_write(src.read_text(encoding='utf-8'))
+        print(f'Installed -> {list(map(str,ts))}')
 
 # %% ../nbs/00_core.ipynb #iemfvar26t
 from cyclopts import App as _App
