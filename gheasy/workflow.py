@@ -4,7 +4,7 @@
 
 # %% auto #0
 __all__ = ['WorkflowNode', 'StepBuilder', 'StrategyBuilder', 'JobBuilder', 'TriggerBuilder', 'WorkflowBuilder', 'WorkflowDoc',
-           'Workflow', 'docker_build_push', 'pages_deploy', 'uv_ci']
+           'Workflow', 'docker_build_push', 'pages_deploy', 'uv_ci', 'backup_workflow']
 
 # %% ../nbs/01_workflow.ipynb #d4e5f6a7
 import os, subprocess
@@ -759,3 +759,44 @@ def uv_ci(
     if lint_cmd: wfb.uv_lint_job(lint_cmd=lint_cmd, needs=None)
     wfb.uv_test_job(test_cmd=test_cmd,needs="lint" if lint_cmd else None, python_versions=python_versions)
     return wfb.build()
+
+# %% ../nbs/01_workflow.ipynb #667ffca6
+@patch
+def scheduled_backup_job(
+    self: WorkflowBuilder,
+    cron: str = '0 2 * * *',
+    app_path: str = '/srv/app',
+    backup_cmd: str = 'lego-backup',
+    clone_cmd: str | None = 'lego-backup clone',
+    needs: str | None = None,
+) -> WorkflowBuilder:
+    "Add a scheduled SSH backup job. Requires DEPLOY_KEY and HETZNER_IP secrets."
+    ssh_setup = 'mkdir -p ~/.ssh && echo "$DEPLOY_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy'
+    ssh_pfx = 'ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/deploy deploy@$HETZNER_IP'
+    job = (
+        self.job('backup', needs=needs)
+            .runs_on('ubuntu-latest')
+            .env(DEPLOY_KEY='${{ secrets.DEPLOY_KEY }}', HETZNER_IP='${{ secrets.HETZNER_IP }}')
+            .step('Setup SSH key').run(ssh_setup).end_step()
+            .step('Run backup').run(f'{ssh_pfx} "cd {app_path} && docker compose exec -T app {backup_cmd}"').end_step()
+    )
+    if clone_cmd:
+        job.step('Clone to R2').run(f'{ssh_pfx} "cd {app_path} && docker compose exec -T app {clone_cmd}"').end_step()
+    job.end_job()
+    return self
+
+def backup_workflow(
+    name: str = 'Backup',
+    cron: str = '0 2 * * *',
+    app_path: str = '/srv/app',
+    backup_cmd: str = 'lego-backup',
+    clone_to_r2: bool = True,
+) -> WorkflowDoc:
+    'Scheduled + manually dispatchable backup workflow for lego-style deployments.'
+    wf = Workflow(name)
+    wf.on.schedule(cron=cron).workflow_dispatch()
+    wf.scheduled_backup_job(
+        app_path=app_path, backup_cmd=backup_cmd,
+        clone_cmd='lego-backup clone' if clone_to_r2 else None,
+    )
+    return wf.build()
