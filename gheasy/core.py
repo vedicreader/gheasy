@@ -19,17 +19,13 @@ __all__ = ['FINDING_BRANCH_PROTECTION', 'FINDING_DEPENDABOT', 'FINDING_TOPICS', 
            'gh_githooks_pre_commit', 'gh_lfs', 'gh_gitattributes', 'gh_protect', 'gh_topics', 'gh_secret',
            'gh_push_env', 'gh_secrets_from_file', 'gh_deploy_key_setup', 'gh_init', 'gh_add_env', 'gh_add_job',
            'gh_workflow', 'gh_status', 'gh_ship', 'gh_record_deploy', 'gh_setup', 'RepoFinding', 'gh_check', 'gh_apply',
-           'GheasyRepo', 'gh_pyproject_to_hatchling', 'repo_root', 'mv_skill_md', 'main']
+           'GheasyRepo', 'gh_pyproject_to_hatchling', 'repo_root', 'mv_skill_md', 'gh_new', 'main']
 
 # %% ../nbs/00_core.ipynb #11v4pz14mo9k
-@dataclass
-class EnvConfig:
-    host: str
-    domain: str
-    branch: str = 'main'
-    srv_path: str = '/srv/app'
+@dataclass(frozen=True)
+class EnvConfig: host: str; domain: str; branch: str = 'main'; srv_path: str = '/srv/app'
 
-@dataclass
+@dataclass(frozen=True)
 class DeployOptions:
     user: str = 'deploy'
     key: str = None
@@ -58,57 +54,57 @@ class GheasyConfig:
     deploys: dict = field(default_factory=dict)        # runtime state, persisted but not in workflow YAML
     deploy_pkg: str = None
 
-@patch
-def add_env(self:GheasyConfig, name, host, domain, branch=None, srv_path='/srv/app'):
-    self.envs[name] = EnvConfig(host=host, domain=domain, branch=branch or 'main', srv_path=srv_path)
-    return self
+    def add_env(self, name, host, domain, branch=None, srv_path='/srv/app'):
+        self.envs[name] = EnvConfig(host=host, domain=domain, branch=branch or 'main', srv_path=srv_path)
+        return self
 
-@patch
-def set_lfs(self:GheasyConfig, patterns):
-    self.lfs = list(patterns)
-    return self
+    def set_lfs(self, patterns):
+        self.lfs = list(patterns)
+        return self
 
-@patch
-def set_hooks(self:GheasyConfig, hooks):
-    self.hooks = hooks
-    return self
+    def set_hooks(self:GheasyConfig, hooks):
+        self.hooks = hooks
+        return self
 
-@patch
-def set_workflows(self:GheasyConfig, workflows):
-    self.workflows = {**self.workflows, **workflows}
-    return self
+    def set_workflows(self, workflows):
+        self.workflows = {**self.workflows, **workflows}
+        return self
 
-@patch
-def add_job(self:GheasyConfig, name, job):
-    self.extra_jobs[name] = job
-    return self
+    def add_job(self, name, job):
+        self.extra_jobs[name] = job
+        return self
 
-@patch
-def to_dict(self:GheasyConfig): return asdict(self)
 
-@patch(cls_method=True)
-def from_dict(cls:GheasyConfig, d):
-    envs = {k: EnvConfig(**v) for k, v in d.get('envs', {}).items()}
-    rest = filter_keys(d, lambda k: k in cls.__dataclass_fields__ and k != 'envs')
-    return cls(envs=envs, **rest)
+    def to_dict(self): return asdict(self)
 
-@patch
-def save(self:GheasyConfig, path='.'):
-    cfg_path(path).write_json(self.to_dict())
-    return self
+    @classmethod
+    def from_dict(cls, d):
+        envs = {k: EnvConfig(**v) for k, v in d.get('envs', {}).items()}
+        rest = filter_keys(d, lambda k: k in cls.__dataclass_fields__ and k != 'envs')
+        return cls(envs=envs, **rest)
 
-@patch(cls_method=True)
-def load(cls:GheasyConfig, path='.'):
-    'Load config from .gheasy/config.json. Raises FileNotFoundError if absent.'
-    return cls.from_dict(cfg_path(path).read_json()) if cfg_path(path).exists() else cls()
+    def save(self, path='.'):
+        cfg_path(path).write_json(self.to_dict())
+        return self
 
-# %% ../nbs/00_core.ipynb #2b0fcmk3rqu
-@patch(cls_method=True)
-def from_pyproject(cls:GheasyConfig, path='.'):
-    "Bootstrap config from pyproject.toml [project] name."
-    import tomllib
-    with open(Path(path)/'pyproject.toml', 'rb') as f: data = tomllib.load(f)
-    return cls(app=data['project']['name'])
+    @classmethod
+    def load(cls, path='.'):
+        'Load config from .gheasy/config.json. Raises FileNotFoundError if absent.'
+        return cls.from_dict(cfg_path(path).read_json()) if cfg_path(path).exists() else cls()
+
+    @classmethod
+    def from_pyproject(cls:GheasyConfig, path='.'):
+        'Bootstrap config from pyproject.toml [project] name.'
+        import tomllib
+        with open(Path(path)/'pyproject.toml', 'rb') as f: data = tomllib.load(f)
+        return cls(app=data['project']['name'])
+
+    @classmethod
+    def from_pyproject(cls, path='.'):
+        'Bootstrap config from pyproject.toml [project] name.'
+        import tomllib
+        with open(Path(path)/'pyproject.toml', 'rb') as f: data = tomllib.load(f)
+        return cls(app=data['project']['name'])
 
 # %% ../nbs/00_core.ipynb #g6c9fitg1g5
 def cfg_path(path='.') -> Path:
@@ -576,8 +572,9 @@ class GheasyRepo:
         owner, repo = _resolve_gh_repo_input(ref)
         inst = cls(ref=ref, token=token or _resolve_gh_token())
         inst.create(private=private, description=description)
-        sp.run(['git', 'clone', f'https://github.com/{owner}/{repo}', str(Path(parent_dir) / repo)], check=True)
         local_path = Path(parent_dir) / repo
+        if not (local_path / '.git').exists(): sp.run(['git', 'clone', f'https://github.com/{owner}/{repo}', str(local_path)], check=True)
+        else: print(f'Repo already cloned at {local_path}, skipping clone.')
         if template == 'nbdev': sp.run(['uv', 'run', 'nbdev-new'], cwd=local_path, check=True)
         gh_pyproject_to_hatchling(path=local_path)
         gh_lfs(persist=True, path=local_path)
@@ -615,6 +612,11 @@ def _migrate_pyproject_to_hatchling(path='.'):
         if sdist.get('include') != sdist_includes:
             sdist['include'] = sdist_includes
             changed = True
+        ver = doc.setdefault('tool', {}).setdefault('hatch', {}).setdefault('version', {})
+        ver_path = f'{name}/__init__.py'
+        if ver.get('path') != ver_path:
+            ver['path'] = ver_path
+            changed = True
     for key in ('setuptools', 'setup-tools'):
         if key in doc.get('tool', {}):
             del doc['tool'][key]
@@ -648,11 +650,27 @@ def mv_skill_md(dry_run=True, path='.'):
         for p in ts: p.mk_write(src.read_text(encoding='utf-8'))
         print(f'Installed -> {list(map(str,ts))}')
 
+# %% ../nbs/00_core.ipynb #c34a4212
+def gh_new(ref: str, template: str = 'nbdev', private: bool = True,
+           description: str = '', token: str = None, parent_dir: str = '.',
+           topics: list = None, workflows: list = None):
+    """Scaffold a full project: create GitHub repo, clone, configure, and push.
+
+    ref can be 'owner/repo' or a GitHub URL.
+    workflows is a list of CI flags to enable: test lint publish_pypi docker_build node rust go
+    Example: gheasy gh-new myorg/myrepo --workflows test lint --topics python nbdev
+    """
+    wfs = {k: True for k in workflows} if workflows else None
+    GheasyRepo.new(ref, template=template, private=private, description=description,
+                   token=token, parent_dir=parent_dir,
+                   topics=listify(topics) or None, workflows=wfs)
+
 # %% ../nbs/00_core.ipynb #iemfvar26t
 from cyclopts import App as _App
 
-app = _App(name='gheasy', help='GitHub made easy \u2014 git workflows, CI/CD, hooks, LFS.')
+app = _App(name='gheasy', help='GitHub made easy — git workflows, CI/CD, hooks, LFS.')
 
+app.command(gh_new)
 app.command(gh_setup)
 app.command(gh_init)
 app.command(gh_add_env)

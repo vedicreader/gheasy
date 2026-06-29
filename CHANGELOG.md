@@ -2,6 +2,11 @@
 
 <!-- do not remove -->
 
+## 0.0.4
+nbdev pyproject to hatchling bugfix + cli addition
+
+
+
 ## 0.0.3
 skills
 
