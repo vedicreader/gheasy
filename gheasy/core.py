@@ -12,10 +12,12 @@ from ghapi.all import GhApi
 from fastcore.all import patch, filter_values, Path, filter_keys, in_, L, listify, not_, is_
 from .workflow import Workflow, JobBuilder, StepBuilder
 
+DEFAULT_PYTHON = '3.13'  # `uv python pin` target for newly scaffolded projects
+
 # %% auto #0
-__all__ = ['FINDING_BRANCH_PROTECTION', 'FINDING_DEPENDABOT', 'FINDING_TOPICS', 'FINDING_LFS', 'FINDING_HOOKS', 'FINDING_BUILD',
-           'FINDING_WORKFLOWS', 'app', 'EnvConfig', 'DeployOptions', 'GheasyConfig', 'cfg_path', 'mk_deploy_job',
-           'mk_workflow', 'mk_gitattributes', 'mk_dependabot', 'mk_hook', 'nbdev_hook', 'gh_hooks',
+__all__ = ['DEFAULT_PYTHON', 'FINDING_BRANCH_PROTECTION', 'FINDING_DEPENDABOT', 'FINDING_TOPICS', 'FINDING_LFS', 'FINDING_HOOKS',
+           'FINDING_BUILD', 'FINDING_WORKFLOWS', 'app', 'EnvConfig', 'DeployOptions', 'GheasyConfig', 'cfg_path',
+           'mk_deploy_job', 'mk_workflow', 'mk_gitattributes', 'mk_dependabot', 'mk_hook', 'nbdev_hook', 'gh_hooks',
            'gh_githooks_pre_commit', 'gh_lfs', 'gh_gitattributes', 'gh_protect', 'gh_topics', 'gh_secret',
            'gh_push_env', 'gh_secrets_from_file', 'gh_deploy_key_setup', 'gh_init', 'gh_add_env', 'gh_add_job',
            'gh_workflow', 'gh_status', 'gh_ship', 'gh_record_deploy', 'gh_setup', 'RepoFinding', 'gh_check', 'gh_apply',
@@ -567,7 +569,7 @@ class GheasyRepo:
 
     @classmethod
     def new(cls, ref, template='nbdev', private=True, description='',
-            token=None, parent_dir='.', topics=None, workflows=None):
+            token=None, parent_dir='.', topics=None, workflows=None, python=DEFAULT_PYTHON):
         "Full project scaffold: create repo, clone, configure, push."
         owner, repo = _resolve_gh_repo_input(ref)
         inst = cls(ref=ref, token=token or _resolve_gh_token())
@@ -575,12 +577,13 @@ class GheasyRepo:
         local_path = Path(parent_dir) / repo
         if not (local_path / '.git').exists(): sp.run(['git', 'clone', f'https://github.com/{owner}/{repo}', str(local_path)], check=True)
         else: print(f'Repo already cloned at {local_path}, skipping clone.')
+        sp.run(['uv', 'python', 'pin', python], cwd=local_path, check=True)
         if template == 'nbdev': sp.run(['uv', 'run', 'nbdev-new'], cwd=local_path, check=True)
         gh_pyproject_to_hatchling(path=local_path)
         gh_lfs(persist=True, path=local_path)
         gh_githooks_pre_commit(path=local_path)
         if workflows: gh_init(repo, '', '', workflows=workflows, path=local_path)
-        gh_workflow(token=inst.token, path=local_path)
+        if workflows: gh_workflow(token=inst.token, path=local_path)
         sp.run(['git', 'add', '-A'], cwd=local_path, check=True)
         sp.run(['git', 'commit', '-m', 'chore: gheasy init'], cwd=local_path, check=True)
         sp.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=local_path, check=True)
@@ -653,17 +656,17 @@ def mv_skill_md(dry_run=True, path='.'):
 # %% ../nbs/00_core.ipynb #c34a4212
 def gh_new(ref: str, template: str = 'nbdev', private: bool = True,
            description: str = '', token: str = None, parent_dir: str = '.',
-           topics: list = None, workflows: list = None):
+           topics: list = None, workflows: list = None, python: str = DEFAULT_PYTHON):
     """Scaffold a full project: create GitHub repo, clone, configure, and push.
 
     ref can be 'owner/repo' or a GitHub URL.
     workflows is a list of CI flags to enable: test lint publish_pypi docker_build node rust go
-    Example: gheasy gh-new myorg/myrepo --workflows test lint --topics python nbdev
+    Example: gheasy gh-new myorg/myrepo --workflows test lint --topics python nbdev --python 3.13
     """
     wfs = {k: True for k in workflows} if workflows else None
     GheasyRepo.new(ref, template=template, private=private, description=description,
                    token=token, parent_dir=parent_dir,
-                   topics=listify(topics) or None, workflows=wfs)
+                   topics=listify(topics) or None, workflows=wfs, python=python)
 
 # %% ../nbs/00_core.ipynb #iemfvar26t
 from cyclopts import App as _App
