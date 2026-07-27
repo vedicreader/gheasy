@@ -2,6 +2,11 @@
 
 <!-- do not remove -->
 
+## 0.0.5
+pins python to 3.13, git workflows optional
+
+
+
 ## 0.0.4
 nbdev pyproject to hatchling bugfix + cli addition
 
