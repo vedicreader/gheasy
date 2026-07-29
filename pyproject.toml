@@ -7,7 +7,7 @@ name = "gheasy"
 dynamic = ["version"]
 description = "github made easy"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "Apache-2.0"}
 authors = [{name = "Karthik", email = "karthik.rajgopal@hotmail.com"}]
 keywords = ['nbdev']

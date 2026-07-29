@@ -2,6 +2,11 @@
 
 <!-- do not remove -->
 
+## 0.0.6
+gheasy new setup python requires to >=3.11
+
+
+
 ## 0.0.5
 pins python to 3.13, git workflows optional
 

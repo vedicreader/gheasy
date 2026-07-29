@@ -598,6 +598,7 @@ def _migrate_pyproject_to_hatchling(path='.'):
         changed = True
     name = doc.get('project', {}).get('name', '')
     if name:
+        doc['project']['requires-python'] = ">=3.11"
         targets = doc.setdefault('tool', {}).setdefault('hatch', {}).setdefault('build', {}).setdefault('targets', {})
         wheel = targets.setdefault('wheel', {})
         if wheel.get('packages') != [name]:
