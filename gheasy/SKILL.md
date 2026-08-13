@@ -1,10 +1,68 @@
 # gheasy
 
-gheasy generates GitHub Actions workflows from Python,
-routes secrets and variables from a local env into GitHub,
-and audits repo health.
+gheasy makes GitHub Actions, secrets, and deploys operable without hand-writing YAML.
+Config lives in `.gheasy/config.json`; the managed workflow is `.github/workflows/gheasy.yml`.
 
-## Workflow builder
+## Happy path
+
+```bash
+# Library package
+gheasy setup mylib --workflow-preset library
+
+# App (FastHTML / VPS)
+gheasy setup myapp 1.2.3.4 myapp.com --workflow-preset fasthtml --deploy-cmd ./deploy.sh
+gheasy secrets
+gheasy gh-deploy-key-setup deploy_key
+
+gheasy status
+gheasy logs
+```
+
+Python equivalent:
+
+```python
+from gheasy import gh_setup, gh_secrets, gh_deploy_key_setup, gh_status, gh_logs
+
+gh_setup('myapp', '1.2.3.4', 'myapp.com',
+         workflow_preset='fasthtml', deploy_cmd='./deploy.sh')
+gh_secrets('.env')
+gh_deploy_key_setup('deploy_key')
+gh_status(); gh_logs()
+```
+
+## Presets
+
+| Preset | Jobs |
+|---|---|
+| `python` | test + lint (+ PR) |
+| `library` | test + lint + PyPI on release (+ PR) |
+| `fasthtml` | test (+ PR); SSH deploy if host + `deploy_cmd` |
+| `nodejs` / `rust` / `go` | language CI (+ PR) |
+
+```bash
+gheasy enable test lint publish_pypi
+gheasy workflow
+```
+
+## Secrets
+
+```python
+gh_secrets('.env')                 # all keys → secrets (default)
+gh_secrets('.env', schema=True)    # cfg.env_schema: None→secret, str→variable
+```
+
+Requires authenticated `gh` CLI.
+
+## Logs & status
+
+```bash
+gheasy runs
+gheasy logs          # latest gheasy.yml run
+gheasy watch
+gheasy status        # local deploy records + recent runs
+```
+
+## Custom DSL (optional)
 
 ```python
 from gheasy.workflow import Workflow
@@ -14,97 +72,16 @@ wfb.on.push(branches=["main"]).pull_request()
 wfb.uv_lint_job()
 wfb.uv_test_job(needs="lint")
 wfb.uv_pypi_job(needs="test")
-print(wfb.build().to_yaml())
+wfb.build().save(".github/workflows/ci.yml")
 ```
 
-The `uv_*_job` presets bundle the usual checkout, setup-uv, install,
-and run steps. For anything else, build a job step by step:
+## Repo health / LFS
 
 ```python
-wfb.job("deploy").needs("test").runs_on("ubuntu-latest")\
-    .checkout().end_step()\
-    .setup_uv().end_step()\
-    .step("Deploy").run("fly deploy --remote-only").end_job()
+from gheasy import gh_lfs, gh_check, gh_apply
+gh_lfs(['*.mp3', '*.png', '*.jpg'])
+gh_apply(gh_check(path='.'))
 ```
-
-## Config and secret routing
-
-```python
-from gheasy.core import GheasyConfig, gh_push_env
-
-cfg = GheasyConfig(app='myapp', env_schema={
-    'PORT': '5001',             # string default → gh variable set
-    'DOMAIN': 'http://localhost:5001',
-    'JWT_SCRT': None,           # None → gh secret set
-    'RESEND_API_KEY': None,
-    'CF_TUNNEL_TOKEN': None,
-})
-cfg.save()
-
-import os
-gh_push_env(dict(os.environ))   # routes each key by schema
-```
-
-Keys with `None` schema become GitHub secrets (`gh secret set`).
-Keys with a string default become variables (`gh variable set`).
-`gh_push_env` sends them all in one pass.
-
-Push from a `.env` file without a schema:
-
-```python
-from gheasy.core import gh_secrets_from_file
-gh_secrets_from_file('.env')
-```
-
-## Full project setup
-
-```python
-from gheasy.core import gh_setup
-
-gh_setup('myapp', '1.2.3.4', 'myapp.com', deploy_cmd='./deploy.sh')
-```
-
-Creates `.gheasy/config.json`, writes `.github/workflows/gheasy.yml`,
-and installs `uv run nbdev-prepare` as the pre-commit hook.
-
-## git LFS
-
-```python
-from gheasy import gh_lfs
-
-gh_lfs(['*.mp3', '*.png', '*.jpg'], path='.')
-```
-
-Writes `.gitattributes` LFS tracking patterns and runs `git lfs install`.
-
-## Repo health
-
-```python
-from gheasy.core import gh_check, gh_apply
-
-findings = gh_check(path='.')
-gh_apply(findings)
-```
-
-`gh_check` audits: pre-commit hook present, `.gitattributes` LFS block,
-pyproject.toml on hatchling, dependabot config, repo topics.
-`gh_apply` applies the fixes it can.
-
-## GheasyConfig
-
-```python
-from gheasy import GheasyConfig
-
-cfg = GheasyConfig.load('.')        # load from .gheasy/config.json
-cfg.app                              # app name
-cfg.env_schema                       # {key: default_or_None}
-```
-
-## Generated workflow
-
-Written to `.github/workflows/gheasy.yml` with a
-`# Managed by gheasy — do not edit directly` header.
-Re-run `gh_workflow()` after editing the config to regenerate.
 
 ## Installing this skill into a repo
 
@@ -112,6 +89,3 @@ Re-run `gh_workflow()` after editing the config to regenerate.
 from gheasy.core import mv_skill_md
 mv_skill_md(dry_run=False)
 ```
-
-Copies the bundled `SKILL.md` to `.claude/skills/gheasy/` and `.agents/skills/gheasy/`
-under the repo root so coding agents pick it up. Defaults to `dry_run=True`.
