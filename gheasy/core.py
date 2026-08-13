@@ -19,9 +19,10 @@ __all__ = ['DEFAULT_PYTHON', 'FINDING_BRANCH_PROTECTION', 'FINDING_DEPENDABOT', 
            'FINDING_BUILD', 'FINDING_WORKFLOWS', 'app', 'EnvConfig', 'DeployOptions', 'GheasyConfig', 'cfg_path',
            'mk_deploy_job', 'mk_workflow', 'mk_gitattributes', 'mk_dependabot', 'mk_hook', 'nbdev_hook', 'gh_hooks',
            'gh_githooks_pre_commit', 'gh_lfs', 'gh_gitattributes', 'gh_protect', 'gh_topics', 'gh_secret',
-           'gh_push_env', 'gh_secrets_from_file', 'gh_deploy_key_setup', 'gh_init', 'gh_add_env', 'gh_add_job',
-           'gh_workflow', 'gh_status', 'gh_ship', 'gh_record_deploy', 'gh_setup', 'RepoFinding', 'gh_check', 'gh_apply',
-           'GheasyRepo', 'gh_pyproject_to_hatchling', 'repo_root', 'mv_skill_md', 'gh_new', 'main']
+           'gh_push_env', 'gh_secrets_from_file', 'gh_secrets', 'gh_deploy_key_setup', 'gh_init', 'gh_add_env',
+           'gh_add_job', 'gh_workflow', 'gh_enable', 'gh_runs', 'gh_logs', 'gh_watch', 'gh_status', 'gh_ship',
+           'gh_record_deploy', 'gh_setup', 'RepoFinding', 'gh_check', 'gh_apply', 'GheasyRepo',
+           'gh_pyproject_to_hatchling', 'repo_root', 'mv_skill_md', 'gh_new', 'main']
 
 # %% ../nbs/00_core.ipynb #f612e9c8e9711ae9
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ class GheasyConfig:
     hooks: dict = field(default_factory=dict)
     lfs: list = field(default_factory=list)
     workflows: dict = field(default_factory=dict)      # opt-in flags, all False by default
-    workflow_preset: str = None                        # 'python'|'fasthtml'|'fastapi-react'|'nodejs'|'rust'|'go'
+    workflow_preset: str = None                        # 'python'|'library'|'fasthtml'|'fastapi-react'|'nodejs'|'rust'|'go'
     deploy_cmd: str = None                             # override deploy step; None = skip deploy job
     extra_jobs: dict = field(default_factory=dict)
     deploys: dict = field(default_factory=dict)        # runtime state, persisted but not in workflow YAML
@@ -101,14 +102,23 @@ class GheasyConfig:
         with open(Path(path)/'pyproject.toml', 'rb') as f: data = tomllib.load(f)
         return cls(app=data['project']['name'])
 
+
 # %% ../nbs/00_core.ipynb #bce1eff0d6df247f
 def cfg_path(path='.') -> Path:
     'Return path to .gheasy/config.json'
     return Path(path) / '.gheasy' / 'config.json'
 
 # %% ../nbs/00_core.ipynb #62b8f0fa7c496a67
-_preset = {'python': {}, 'fasthtml': {}, 'rust': {'rust': True}, 'go': {'go': True},
-'fastapi-react': {'node': True}, 'nodejs': {'node': True}}
+# Named presets pick sensible CI flags. Explicit cfg.workflows always wins.
+_preset = {
+    'python': {'test': True, 'lint': True, 'on_pull_request': True},
+    'library': {'test': True, 'lint': True, 'publish_pypi': True, 'on_pull_request': True},
+    'fasthtml': {'test': True, 'on_pull_request': True},
+    'fastapi-react': {'test': True, 'node': True, 'on_pull_request': True},
+    'nodejs': {'node': True, 'on_pull_request': True},
+    'rust': {'rust': True, 'on_pull_request': True},
+    'go': {'go': True, 'on_pull_request': True},
+}
 
 def _res_wfs(cfg):
     "Merge preset defaults with explicit cfg.workflows (explicit always wins)."
@@ -123,14 +133,20 @@ def mk_deploy_job(env_name, cfg, wfb, cmd=None):
         print(f'Warning: no deploy_cmd configured for {env_name!r} — skipping deploy job. '
               f'Set cfg.deploy_cmd or pass cmd= to mk_deploy_job.')
         return None
-    (wfb.job(f'deploy-{env_name}').runs_on('ubuntu-latest').needs('test').environment(env_name)
-        .if_(f"github.ref == 'refs/heads/{env.branch}'").checkout().end_step()
+    if not env.host:
+        print(f'Warning: env {env_name!r} has no host — skipping deploy job.')
+        return None
+    jb = (wfb.job(f'deploy-{env_name}').runs_on('ubuntu-latest').environment(env_name)
+          .if_(f"github.ref == 'refs/heads/{env.branch}'"))
+    if 'test' in wfb._job_map: jb.needs('test')
+    (jb.checkout().end_step()
         .setup_uv().end_step()
         .step('Deploy SSH key').run(
             'mkdir -p ~/.ssh && echo "${{ secrets.DEPLOY_KEY }}" > ~/.ssh/id_rsa '
             '&& chmod 600 ~/.ssh/id_rsa\n'
             f'ssh-keyscan {env.host} >> ~/.ssh/known_hosts').end_step()
         .step(f'Deploy to {env_name}').run(deploy_step).end_job())
+
 
 # %% ../nbs/00_core.ipynb #79610649857c49e9
 def _inject_raw_job(job_id, wfb, raw):
@@ -319,6 +335,26 @@ def gh_secrets_from_file(env_file='.env', env=None, dry_run=False):
         key, _, value = line.partition('=')
         gh_secret(key.strip(), value.strip(), env=env, dry_run=dry_run)
 
+def _parse_env_file(env_file='.env'):
+    "Parse KEY=VALUE pairs from an env file into a dict."
+    out = {}
+    for line in Path(env_file).read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'): continue
+        key, _, value = line.partition('=')
+        out[key.strip()] = value.strip()
+    return out
+
+def gh_secrets(env_file='.env', schema: bool = False, env=None, dry_run=False, path='.'):
+    """Push local env values to GitHub.
+
+    Default: every key in `env_file` becomes a repository secret.
+    Pass `schema=True` to route via `cfg.env_schema` (None → secret, str → variable).
+    """
+    if schema: return gh_push_env(_parse_env_file(env_file), dry_run=dry_run, path=path)
+    return gh_secrets_from_file(env_file, env=env, dry_run=dry_run)
+
+
 # %% ../nbs/00_core.ipynb #961beb9422ea2b84
 def gh_deploy_key_setup(key_path, dry_run=False):
     """Read SSH private key from file and push as DEPLOY_KEY GitHub secret.
@@ -347,18 +383,19 @@ def _resolve_gh_repo_input(ref=None, path='.'):
     raise ValueError(f'Cannot parse owner/repo from: {ref}')
 
 # %% ../nbs/00_core.ipynb #d0a93de85b941902
-def gh_init(name, host, domain, env='prod', branch=None, srv_path='/srv/app',
+def gh_init(name, host=None, domain=None, env='prod', branch=None, srv_path='/srv/app',
             health_path='/health', test_cmd=None, env_schema=None,
             hooks=None, lfs=None, workflows=None, workflow_preset=None,
             deploy_cmd=None, path='.'):
-    "Create or update .gheasy/config.json."
+    "Create or update .gheasy/config.json. Host/domain optional for library-only CI."
     branch = branch or _git_branch(path)
     cfg = GheasyConfig(app=name, health_path=health_path, test_cmd=test_cmd, env_schema=env_schema or {},
         hooks=hooks or {}, lfs=lfs or [], workflows=workflows or {}, workflow_preset=workflow_preset,deploy_cmd=deploy_cmd)
-    cfg.add_env(env, host, domain, branch=branch, srv_path=srv_path)
+    if host and domain: cfg.add_env(env, host, domain, branch=branch, srv_path=srv_path)
     cfg.save(path)
     print(f'Config written to {cfg_path(path)}')
     return cfg_path(path)
+
 
 # %% ../nbs/00_core.ipynb #79f8b906fe103403
 def gh_add_env(env, host, domain, branch=None, srv_path='/srv/app', path='.'):
@@ -402,21 +439,64 @@ def gh_workflow(token=None, path='.'):
                 content=content)
         print('Workflow uploaded to GitHub.')
 
-def gh_status(path='.'):
-    "Print deploy state table."
+def gh_enable(*flags, path='.'):
+    "Enable workflow flags (test, lint, publish_pypi, ...) and regenerate the YAML."
+    cfg = GheasyConfig.load(path)
+    cfg.set_workflows({f: True for f in flags}).save(path)
+    gh_workflow(path=path)
+    return cfg
+
+def _latest_run_id(workflow='gheasy.yml', path='.'):
+    "Return databaseId of the latest run for workflow, or None."
+    owner, repo = _get_repo_slug(path)
+    r = sp.run(['gh', 'run', 'list', '--workflow', workflow, '--repo', f'{owner}/{repo}',
+                '--limit', '1', '--json', 'databaseId'], capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip(): return None
+    import json as _json
+    rows = _json.loads(r.stdout)
+    return rows[0]['databaseId'] if rows else None
+
+def gh_runs(limit=5, workflow='gheasy.yml', path='.'):
+    "List recent GitHub Actions runs for the managed workflow."
+    owner, repo = _get_repo_slug(path)
+    sp.run(['gh', 'run', 'list', '--workflow', workflow, '--repo', f'{owner}/{repo}',
+            '--limit', str(limit)], check=False)
+
+def gh_logs(run_id=None, workflow='gheasy.yml', path='.'):
+    "Print logs for a run (defaults to latest `gheasy.yml` run)."
+    owner, repo = _get_repo_slug(path)
+    rid = run_id or _latest_run_id(workflow=workflow, path=path)
+    if not rid:
+        print(f'No runs found for {workflow}.'); return
+    sp.run(['gh', 'run', 'view', str(rid), '--log', '--repo', f'{owner}/{repo}'], check=False)
+
+def gh_watch(run_id=None, workflow='gheasy.yml', path='.'):
+    "Watch a run until completion (defaults to latest `gheasy.yml` run)."
+    owner, repo = _get_repo_slug(path)
+    rid = run_id or _latest_run_id(workflow=workflow, path=path)
+    if not rid:
+        print(f'No runs found for {workflow}.'); return
+    sp.run(['gh', 'run', 'watch', str(rid), '--repo', f'{owner}/{repo}'], check=False)
+
+def gh_status(path='.', runs: int = 5):
+    "Print deploy state and recent Actions runs."
     if not cfg_path(path).exists():
         print('No .gheasy/config.json found.')
-        return
-    cfg = GheasyConfig.load(path)
-    if not cfg.deploys:
-        print('No deploys recorded yet.')
-        return
-    print(f'{"Env":<12} {"Domain":<30} {"Version":<10} {"Deployed At":<25} {"Status"}')
-    print('-' * 90)
-    for env_name, d in cfg.deploys.items():
-        env_cfg = cfg.envs.get(env_name, EnvConfig(host='?', domain='?'))
-        print(f'{env_name:<12} {env_cfg.domain:<30} {d.get("version","?")[:8]:<10} '
-              f'{d.get("deployed_at","?"):<25} {d.get("status","?")}')
+    else:
+        cfg = GheasyConfig.load(path)
+        if not cfg.deploys:
+            print('No deploys recorded yet.')
+        else:
+            print(f'{"Env":<12} {"Domain":<30} {"Version":<10} {"Deployed At":<25} {"Status"}')
+            print('-' * 90)
+            for env_name, d in cfg.deploys.items():
+                env_cfg = cfg.envs.get(env_name, EnvConfig(host='?', domain='?'))
+                print(f'{env_name:<12} {env_cfg.domain:<30} {d.get("version","?")[:8]:<10} '
+                      f'{d.get("deployed_at","?"):<25} {d.get("status","?")}')
+    if runs:
+        print('\nRecent Actions runs:')
+        try: gh_runs(limit=runs, path=path)
+        except Exception as e: print(f'(could not list runs: {e})')
 
 def gh_ship(token=None, path='.'):
     "Push workflow YAML (optionally to GitHub API) then print status."
@@ -433,14 +513,26 @@ def gh_record_deploy(env, sha, path='.'):
     }
     cfg.save(path)
 
+
 # %% ../nbs/00_core.ipynb #f580cca745a89a51
-def gh_setup(name, host, domain, env='prod', branch=None, srv_path='/srv/app',
+def gh_setup(name, host=None, domain=None, env='prod', branch=None, srv_path='/srv/app',
              test_cmd=None, env_schema=None, token=None,
              hooks=None, hook_cmd='uv run nbdev_prepare',
              lfs=None, workflows=None, workflow_preset=None,
              deploy_cmd=None, path='.'):
-    """One-call setup: gh_init + gh_workflow + gh_hooks.
-    Set hooks={} to skip hook installation."""
+    """One-call setup: config + workflow YAML + pre-commit hook.
+
+    Library CI (no server)::
+
+        gh_setup('mylib', workflow_preset='library')
+
+    App deploy (SSH via DEPLOY_KEY)::
+
+        gh_setup('myapp', '1.2.3.4', 'myapp.com',
+                 workflow_preset='fasthtml', deploy_cmd='./deploy.sh')
+
+    Set hooks={} to skip hook installation.
+    """
     gh_init(name, host, domain, env=env, branch=branch, srv_path=srv_path,
             health_path='/health', test_cmd=test_cmd, env_schema=env_schema,
             hooks=hooks or {}, lfs=lfs, workflows=workflows,
@@ -449,6 +541,7 @@ def gh_setup(name, host, domain, env='prod', branch=None, srv_path='/srv/app',
     if hooks is None: gh_hooks({'pre-commit': hook_cmd}, path=path)
     elif hooks: gh_hooks(hooks, path=path)
     return cfg_path(path)
+
 
 # %% ../nbs/00_core.ipynb #1708d0f414320916
 FINDING_BRANCH_PROTECTION = 'branch-protection'
@@ -665,25 +758,38 @@ def gh_new(ref: str, template: str = 'nbdev', private: bool = True,
 # %% ../nbs/00_core.ipynb #iemfvar26t
 from cyclopts import App as _App
 
-app = _App(name='gheasy', help='GitHub made easy — git workflows, CI/CD, hooks, LFS.')
+app = _App(name='gheasy', help='GitHub made easy — setup, secrets, workflows, logs.')
 
-app.command(gh_new)
-app.command(gh_setup)
-app.command(gh_init)
-app.command(gh_add_env)
-app.command(gh_add_job)
-app.command(gh_workflow)
-app.command(gh_ship)
-app.command(gh_status)
-app.command(gh_check)
-app.command(gh_apply)
-app.command(gh_hooks)
-app.command(gh_lfs)
-app.command(gh_gitattributes)
-app.command(gh_protect)
-app.command(gh_topics)
-app.command(gh_push_env)
-app.command(gh_secrets_from_file)
-app.command(gh_pyproject_to_hatchling)
+def _cmd(fn, *names):
+    "Register fn under each CLI name."
+    for n in names: app.command(fn, name=n)
+
+# Happy path (short names) + legacy gh-* names
+_cmd(gh_setup, 'setup', 'gh-setup')
+_cmd(gh_secrets, 'secrets')
+_cmd(gh_workflow, 'workflow', 'gh-workflow')
+_cmd(gh_enable, 'enable')
+_cmd(gh_status, 'status', 'gh-status')
+_cmd(gh_logs, 'logs')
+_cmd(gh_watch, 'watch')
+_cmd(gh_runs, 'runs')
+
+_cmd(gh_new, 'gh-new')
+_cmd(gh_init, 'gh-init')
+_cmd(gh_add_env, 'gh-add-env')
+_cmd(gh_add_job, 'gh-add-job')
+_cmd(gh_ship, 'gh-ship')
+_cmd(gh_check, 'gh-check')
+_cmd(gh_apply, 'gh-apply')
+_cmd(gh_hooks, 'gh-hooks')
+_cmd(gh_lfs, 'gh-lfs')
+_cmd(gh_gitattributes, 'gh-gitattributes')
+_cmd(gh_protect, 'gh-protect')
+_cmd(gh_topics, 'gh-topics')
+_cmd(gh_push_env, 'gh-push-env')
+_cmd(gh_secrets_from_file, 'gh-secrets-from-file')
+_cmd(gh_deploy_key_setup, 'gh-deploy-key-setup')
+_cmd(gh_pyproject_to_hatchling, 'gh-pyproject-to-hatchling')
 
 def main(): app()
+
