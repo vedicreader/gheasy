@@ -2,6 +2,11 @@
 
 <!-- do not remove -->
 
+## 0.0.7
+ghapi is async, so sync=True for now
+
+
+
 ## 0.0.6
 gheasy new setup python requires to >=3.11
 

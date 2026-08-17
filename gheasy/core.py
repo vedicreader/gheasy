@@ -271,8 +271,9 @@ def _get_repo_slug(path='.'):
 
 def _gh_api(token=None, path='.'):
     "Return (owner, repo_name, GhApi) instance."
+    # ghapi builds async ops unless asked; nothing here awaits, so async would orphan every call
     owner, repo = _get_repo_slug(path)
-    return owner, repo, GhApi(owner=owner, repo=repo, token=token)
+    return owner, repo, GhApi(owner=owner, repo=repo, token=token, sync=True)
 
 def gh_protect(branch='main', require_reviews=1, dismiss_stale=True, require_status_checks=('test',),
            enforce_admins=False, allow_force_pushes=False, token=None, path='.'):
@@ -505,7 +506,7 @@ def gh_check(owner=None, repo=None, token=None, path='.', remote=True, local=Tru
     if remote and (token or _resolve_gh_token()):
         try:
             if owner is None or repo is None: owner, repo = _get_repo_slug(path)
-            api = GhApi(owner=owner, repo=repo, token=token or _resolve_gh_token())
+            api = GhApi(owner=owner, repo=repo, token=token or _resolve_gh_token(), sync=True)
             repo_data = api.repos.get()
             if repo_data.topics: chks.append(RepoFinding('ok', FINDING_TOPICS, f'Topics set: {repo_data.topics}'))
             else: chks.append(RepoFinding('warn', FINDING_TOPICS, 'No topics set', cmd_repr='gh_topics([...])'))
@@ -555,7 +556,7 @@ class GheasyRepo:
         return gh_apply(findings, dry_run=dry_run, confirm=confirm)
 
     def create(self, private=True, description='', auto_init=False):
-        api = GhApi(token=self.token or _resolve_gh_token())
+        api = GhApi(token=self.token or _resolve_gh_token(), sync=True)
         return api.repos.create_for_authenticated_user(
             name=self._repo, private=private,
             description=description, auto_init=auto_init)
