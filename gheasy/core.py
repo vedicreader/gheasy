@@ -4,13 +4,13 @@
 
 # %% ../nbs/00_core.ipynb #86043d4fb391f710
 from __future__ import annotations
-import re, subprocess as sp, stat, os, yaml
+import re, subprocess as sp, stat, os, shutil, tempfile, yaml
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any
 from ghapi.all import GhApi
 from fastcore.all import patch, filter_values, Path, filter_keys, in_, L, listify, not_, is_
-from .workflow import Workflow, JobBuilder, StepBuilder
+from .workflow import Workflow, JobBuilder, StepBuilder, fastship_release
 
 DEFAULT_PYTHON = '3.13'  # `uv python pin` target for newly scaffolded projects
 
@@ -21,7 +21,8 @@ __all__ = ['DEFAULT_PYTHON', 'FINDING_BRANCH_PROTECTION', 'FINDING_DEPENDABOT', 
            'gh_githooks_pre_commit', 'gh_lfs', 'gh_gitattributes', 'gh_protect', 'gh_topics', 'gh_secret',
            'gh_push_env', 'gh_secrets_from_file', 'gh_deploy_key_setup', 'gh_init', 'gh_add_env', 'gh_add_job',
            'gh_workflow', 'gh_status', 'gh_ship', 'gh_record_deploy', 'gh_setup', 'RepoFinding', 'gh_check', 'gh_apply',
-           'GheasyRepo', 'gh_pyproject_to_hatchling', 'repo_root', 'mv_skill_md', 'gh_new', 'main']
+           'GheasyRepo', 'gh_pyproject_to_hatchling', 'repo_root', 'mv_skill_md', 'gh_fastship_new',
+           'gh_fastship_release', 'gh_new', 'main']
 
 # %% ../nbs/00_core.ipynb #f612e9c8e9711ae9
 @dataclass(frozen=True)
@@ -573,7 +574,10 @@ class GheasyRepo:
         else: print(f'Repo already cloned at {local_path}, skipping clone.')
         sp.run(['uv', 'python', 'pin', python], cwd=local_path, check=True)
         if template == 'nbdev': sp.run(['uv', 'run', 'nbdev-new'], cwd=local_path, check=True)
-        gh_pyproject_to_hatchling(path=local_path)
+        elif template == 'fastship': gh_fastship_new(local_path, description=description or 'A Python package', gh_org=owner)
+        # fastship's own layout is setuptools with a slugified package dir; migrating it renames the wheel to the PyPI name.
+        if template != 'fastship': gh_pyproject_to_hatchling(path=local_path)
+        else: gh_fastship_release(path=local_path)
         gh_lfs(persist=True, path=local_path)
         gh_githooks_pre_commit(path=local_path)
         if workflows: gh_init(repo, '', '', workflows=workflows, path=local_path)
@@ -648,6 +652,53 @@ def mv_skill_md(dry_run=True, path='.'):
         for p in ts: p.mk_write(src.read_text(encoding='utf-8'))
         print(f'Installed -> {list(map(str,ts))}')
 
+# %% ../nbs/00_core.ipynb #fastship_scaffold
+# fastship's wheel keeps its LICENSE in dist-info rather than in the package, so `ship-new`
+# raises reading it. This runs the same scaffold with that one read repaired.
+_SHIP_NEW = """import importlib.metadata as md, importlib.resources as ir, sys
+from fastship import release as R
+def _license():
+    try: return ir.files('fastship').joinpath('LICENSE').read_text(encoding='utf-8')
+    except OSError: pass
+    hit = next((f for f in (md.files('fastship') or ()) if f.name == 'LICENSE'), None)
+    return hit.read_text(encoding='utf-8') if hit else ''
+R._read_license = _license
+R.ship_new(sys.argv[1], description=sys.argv[2], path=sys.argv[3],
+           **({'gh_org': sys.argv[4]} if sys.argv[4] else {}))
+"""
+
+def gh_fastship_new(path='.', description='A Python package', gh_org=None):
+    "Scaffold fastship's layout into an existing checkout, keeping the `.git` already there. Non-nbdev packages."
+    root = Path(path).resolve()
+    org = gh_org or (_get_repo_slug(str(root))[0] if (root/'.git').exists() else '')
+    with tempfile.TemporaryDirectory() as tmp:
+        sp.run(['uv', 'run', '--with', 'fastship', 'python', '-', root.name, description, tmp, org or ''],
+               input=_SHIP_NEW, text=True, cwd=tmp, check=True)
+        shutil.copytree(Path(tmp)/root.name, root, dirs_exist_ok=True)
+    print(f'Scaffolded fastship project in {root}')
+    return root
+
+def _set_fastship_release(path='.', mode='tag'):
+    "`[tool.fastship].release`: what makes `ship-release` push a tag for CI instead of uploading itself."
+    import tomlkit
+    pp = Path(path)/'pyproject.toml'
+    if not pp.exists(): return False
+    doc = tomlkit.parse(pp.read_text())
+    ship = doc.setdefault('tool', {}).setdefault('fastship', {})
+    if ship.get('release') == mode: return False
+    ship['release'] = mode
+    pp.write_text(tomlkit.dumps(doc))
+    return True
+
+def gh_fastship_release(path='.', tags: list = None, test_cmd: str = None, tag_release: bool = True):
+    "Write the fastship release workflow, and point `ship-release` at it. Non-nbdev Python packages."
+    root = Path(path)
+    out = fastship_release(f'{root.resolve().name} release', tags=listify(tags) or None,
+                          test_cmd=test_cmd).save(root/'.github'/'workflows'/'release.yml')
+    if tag_release: _set_fastship_release(root)
+    print(f'Wrote {out}')
+    return out
+
 # %% ../nbs/00_core.ipynb #40274a1e568a24ef
 def gh_new(ref: str, template: str = 'nbdev', private: bool = True,
            description: str = '', token: str = None, parent_dir: str = '.',
@@ -655,6 +706,8 @@ def gh_new(ref: str, template: str = 'nbdev', private: bool = True,
     """Scaffold a full project: create GitHub repo, clone, configure, and push.
 
     ref can be 'owner/repo' or a GitHub URL.
+    template is 'nbdev' for a notebook-first library, or 'fastship' for a plain Python
+    package: fastship scaffolds it and the release workflow publishes the tags it pushes.
     workflows is a list of CI flags to enable: test lint publish_pypi docker_build node rust go
     Example: gheasy gh-new myorg/myrepo --workflows test lint --topics python nbdev --python 3.13
     """
@@ -686,5 +739,7 @@ app.command(gh_topics)
 app.command(gh_push_env)
 app.command(gh_secrets_from_file)
 app.command(gh_pyproject_to_hatchling)
+app.command(gh_fastship_new)
+app.command(gh_fastship_release)
 
 def main(): app()

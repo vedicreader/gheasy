@@ -67,6 +67,30 @@ gh_setup('myapp', '1.2.3.4', 'myapp.com', deploy_cmd='./deploy.sh')
 Creates `.gheasy/config.json`, writes `.github/workflows/gheasy.yml`,
 and installs `uv run nbdev-prepare` as the pre-commit hook.
 
+## New projects
+
+```python
+from gheasy.core import gh_new
+
+gh_new('myorg/myrepo', template='nbdev')      # notebook-first library
+gh_new('myorg/myrepo', template='fastship')   # plain Python package
+```
+
+The `fastship` template scaffolds the layout `ship-new` writes, then adds
+`.github/workflows/release.yml` and sets `[tool.fastship].release = "tag"`,
+so `ship-release` pushes `v<version>` and CI builds, publishes and writes the notes.
+It skips the hatchling migration: fastship's layout is setuptools over a slugified
+package directory, and migrating renames the wheel to the PyPI name.
+
+Scaffold or wire up a package that already exists:
+
+```python
+from gheasy.core import gh_fastship_new, gh_fastship_release
+
+gh_fastship_new('.', description='What it does')   # fastship's layout, keeps the .git already there
+gh_fastship_release(path='.', test_cmd='pytest')   # the release workflow and the tag setting
+```
+
 ## git LFS
 
 ```python

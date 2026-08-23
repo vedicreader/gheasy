@@ -4,7 +4,7 @@
 
 # %% auto #0
 __all__ = ['WorkflowNode', 'StepBuilder', 'StrategyBuilder', 'JobBuilder', 'TriggerBuilder', 'WorkflowBuilder', 'WorkflowDoc',
-           'Workflow', 'docker_build_push', 'pages_deploy', 'uv_ci']
+           'Workflow', 'docker_build_push', 'pages_deploy', 'uv_ci', 'fastship_release']
 
 # %% ../nbs/01_workflow.ipynb #d4e5f6a7
 import os, subprocess
@@ -588,6 +588,21 @@ def go_job(self:WorkflowBuilder) -> WorkflowBuilder:
         .step('Build and test').run('go build ./... && go test ./... && go vet ./...').end_job())
     return self
 
+@patch
+def fastship_release_job(self:WorkflowBuilder, needs=None, job_id:str='release') -> WorkflowBuilder:
+    "Add the job a fastship tag release expects: build the tagged wheel, write the notes, publish through trusted publishing."
+    (self.job(job_id, needs=needs)
+        .runs_on('ubuntu-latest')
+        .permissions(contents='write', id_token='write')
+        .checkout(fetch_depth=0).end_step()
+        .setup_uv().end_step()
+        .step('Build').run('uv build').end_step()
+        .step('Check').run('uvx twine check dist/*').end_step()
+        .step('GitHub release').env(GH_TOKEN='${{ secrets.GITHUB_TOKEN }}')
+            .run('gh release create "${{ github.ref_name }}" --generate-notes --verify-tag dist/*').end_step()
+        .step('Publish to PyPI').uses('pypa/gh-action-pypi-publish@release/v1').end_job())
+    return self
+
 # %% ../nbs/01_workflow.ipynb #c1d2e3f4
 class WorkflowDoc:
     "Immutable, serializable workflow document produced by WorkflowBuilder.build()."
@@ -759,3 +774,29 @@ def uv_ci(
     if lint_cmd: wfb.uv_lint_job(lint_cmd=lint_cmd, needs=None)
     wfb.uv_test_job(test_cmd=test_cmd,needs="lint" if lint_cmd else None, python_versions=python_versions)
     return wfb.build()
+
+# %% ../nbs/01_workflow.ipynb #fastship_release_recipe
+def fastship_release(
+    name: str = "release",
+    tags: list[str] | None = None,
+    test_cmd: str | None = None,
+) -> WorkflowDoc:
+    """The CI half of a fastship tag release: `ship-release` pushes `v*`, this builds and publishes it.
+
+    Set ``[tool.fastship].release = "tag"`` in pyproject.toml so ``ship-release`` pushes the tag
+    rather than uploading from a laptop. PyPI publishes through trusted publishing, so no token
+    is stored; configure the repository as a trusted publisher first.
+
+    Args:
+        tags: Tag patterns that start a release. Defaults to ``["v*"]``, which is what fastship pushes.
+        test_cmd: When given, a uv test job the release waits on.
+
+    Example::
+
+        fastship_release(test_cmd='pytest').save('.github/workflows/release.yml')
+    """
+    wf = Workflow(name)
+    wf.on.push(tags=tags or ["v*"]).workflow_dispatch()
+    if test_cmd: wf.uv_test_job(test_cmd=test_cmd)
+    wf.fastship_release_job(needs="test" if test_cmd else None)
+    return wf.build()

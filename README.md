@@ -101,6 +101,64 @@ print(wfb.build().to_yaml())
           - name: Publish
             uses: pypa/gh-action-pypi-publish@release/v1
 
+## fastship releases
+
+A Python package that is not an nbdev template releases with
+[fastship](https://github.com/AnswerDotAI/fastship): `ship-release` pushes
+`v<version>`, and this workflow builds it, writes the notes, and publishes it.
+
+``` python
+from gheasy.workflow import fastship_release
+
+print(fastship_release(test_cmd="pytest").to_yaml())
+```
+
+    name: release
+    on:
+      push:
+        tags:
+          - v*
+      workflow_dispatch:
+    jobs:
+      test:
+        runs-on: ubuntu-latest
+        steps:
+          - name: Checkout
+            uses: actions/checkout@v4
+          - name: Setup uv
+            uses: astral-sh/setup-uv@v5
+          - name: Install dependencies
+            run: uv sync --frozen
+          - name: Test
+            run: uv run pytest
+      release:
+        needs: test
+        runs-on: ubuntu-latest
+        permissions:
+          contents: write
+          id-token: write
+        steps:
+          - name: Checkout
+            uses: actions/checkout@v4
+            with:
+              fetch-depth: 0
+          - name: Setup uv
+            uses: astral-sh/setup-uv@v5
+          - name: Build
+            run: uv build
+          - name: Check
+            run: uvx twine check dist/*
+          - name: GitHub release
+            env:
+              GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            run: gh release create "${{ github.ref_name }}" --generate-notes --verify-tag dist/*
+          - name: Publish to PyPI
+            uses: pypa/gh-action-pypi-publish@release/v1
+
+`gh_fastship_release()` writes it and sets `[tool.fastship].release = "tag"`,
+which is what makes `ship-release` push the tag rather than upload from a laptop.
+`gh_new('owner/repo', template='fastship')` scaffolds a new package with both in place.
+
 ## App Pipeline
 
 For web apps (FastHTML, Django, etc.) — test on every push, deploy to
