@@ -11,6 +11,7 @@ from typing import Any
 from ghapi.all import GhApi
 from fastcore.all import patch, filter_values, Path, filter_keys, in_, L, listify, not_, is_
 from .workflow import Workflow, JobBuilder, StepBuilder
+from .repo import GitError, gateway, url_name
 
 DEFAULT_PYTHON = '3.13'  # `uv python pin` target for newly scaffolded projects
 
@@ -263,11 +264,12 @@ def _resolve_gh_token(token=None):
 
 def _get_repo_slug(path='.'):
     "Parse (owner, repo) from git remote URL."
-    r = sp.run(['git', 'remote', 'get-url', 'origin'], cwd=path, capture_output=True, text=True)
-    url = r.stdout.strip()
-    m = re.search(r'[:/]([^/]+)/([^/]+?)(?:\.git)?$', url)
-    if not m: raise ValueError(f'Cannot parse owner/repo from remote: {url}')
-    return m.group(1), m.group(2)
+    # through `gheasy.repo`'s gateway, so every git process this package starts is serialised
+    try: url = gateway().out(path, 'remote', 'get-url', 'origin', check=False).strip()
+    except GitError: url = ''
+    owner = re.search(r'[:/]([^/]+)/[^/]+?(?:\.git)?/?$', url)
+    if not owner or not url_name(url): raise ValueError(f'Cannot parse owner/repo from remote: {url}')
+    return owner.group(1), url_name(url)
 
 def _gh_api(token=None, path='.'):
     "Return (owner, repo_name, GhApi) instance."
@@ -336,8 +338,8 @@ def gh_deploy_key_setup(key_path, dry_run=False):
 # %% ../nbs/00_core.ipynb #ebfd551afe6333bc
 def _git_branch(path='.'):
     "Detect current git branch, defaulting to 'main'."
-    r = sp.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=path, capture_output=True, text=True)
-    return r.stdout.strip() or 'main'
+    try: return gateway().out(path, 'branch', '--show-current', check=False).strip() or 'main'
+    except GitError: return 'main'
 
 def _resolve_gh_repo_input(ref=None, path='.'):
     "Normalize to (owner, repo). Accepts 'owner/repo', GitHub URL, or local path."
