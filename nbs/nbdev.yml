@@ -7,3 +7,8 @@ website:
   description: "github made easy"
   repo-branch: main
   repo-url: "https://github.com/vedicreader/gheasy"
+
+format-links:
+  - html
+  - format: commonmark
+    text: Markdown

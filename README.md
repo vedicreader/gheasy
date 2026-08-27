@@ -9,9 +9,9 @@
 pip install gheasy
 ```
 
-## Quickstart
+## Generate a CI workflow
 
-One call generates a complete Python CI workflow:
+[`uv_ci`](https://vedicreader.github.io/gheasy/workflow.html#uv_ci) creates a complete Python CI workflow:
 
 ``` python
 from gheasy.workflow import uv_ci
@@ -39,10 +39,183 @@ print(uv_ci("ci", lint_cmd=None).to_yaml())
           - name: Test
             run: uv run pytest
 
-## Library CI
+## Inspect a local repository
 
-gheasy, dockeasy, and every `*easy` package uses this pattern. Lint on
-push → test (needs lint) → publish to PyPI (needs test):
+[`GitRepo.at`](https://vedicreader.github.io/gheasy/repo.html#gitrepo.at) accepts the repository root or any path inside it. `brief` returns a compact record for prompts and status lines. `info` returns the branches, remotes, changes, tags, stashes, active operation, filter health, and recovery points.
+
+``` python
+from gheasy.repo import GitRepo
+repo = GitRepo.at('.')
+status = repo.info()
+status['branch'], status['clean'], status['ahead'], status['behind']
+```
+
+    ('claude/ramabana-branching-review-uqj6v2', False, 0, 0)
+
+## Preview before changing history
+
+`divergence` compares the current branch with its upstream. It rehearses fast-forward, merge, rebase, and reset, then reports conflicts and a recommendation. `merge_preview` and `rebase_preview` inspect a specific integration without changing refs, the index, or the working tree.
+
+``` python
+preview = repo.divergence(fetch=True)
+preview['relation'], preview['recommended'], preview['options']
+
+repo.rebase_preview('origin/main')
+```
+
+    {'current': 'claude/ramabana-branching-review-uqj6v2',
+     'onto': 'origin/main',
+     'clean': False,
+     'dirty': ['README.md',
+      'gheasy/core.py',
+      'gheasy/repo.py',
+      'gheasy/workflow.py',
+      'nbs/00_core.ipynb',
+      'nbs/02_repo.ipynb',
+      'nbs/index.ipynb',
+      'uv.lock'],
+     'untracked': 8,
+     'merge_base': '80bb02422f0bbe2ec6dcef2e74c641b19879ac16',
+     'commits': [{'oid': 'bc8bbb72c1003c9adcca87f3070cb8bdb8efb000',
+       'short': 'bc8bbb7',
+       'parents': ['ea046eeb5df51e5f0fac69276a1985bcbfa4f23e'],
+       'author': 'Claude',
+       'email': 'noreply@anthropic.com',
+       'timestamp': 1787690153,
+       'decoration': 'HEAD -> claude/ramabana-branching-review-uqj6v2, origin/claude/ramabana-branching-review-uqj6v2, origin/claude/ramabana-branching-notebook-nbnzye',
+       'signature': 'N',
+       'subject': 'Release 0.0.8'},
+      {'oid': 'ea046eeb5df51e5f0fac69276a1985bcbfa4f23e',
+       'short': 'ea046ee',
+       'parents': ['80bb02422f0bbe2ec6dcef2e74c641b19879ac16'],
+       'author': 'Claude',
+       'email': 'noreply@anthropic.com',
+       'timestamp': 1787690023,
+       'decoration': '',
+       'signature': 'N',
+       'subject': 'Add gheasy.repo: git repository operations as a literate notebook'}],
+     'conflicts': [],
+     'conflict_likely': False,
+     'already_based': True,
+     'review': {'base': 'origin/main',
+      'head': 'claude/ramabana-branching-review-uqj6v2',
+      'base_oid': '80bb02422f0bbe2ec6dcef2e74c641b19879ac16',
+      'head_oid': 'bc8bbb72c1003c9adcca87f3070cb8bdb8efb000',
+      'diff_base_oid': '80bb02422f0bbe2ec6dcef2e74c641b19879ac16',
+      'merge_base': '80bb02422f0bbe2ec6dcef2e74c641b19879ac16',
+      'mode': 'review',
+      'base_only': 0,
+      'head_only': 2,
+      'files': [{'path': 'CHANGELOG.md',
+        'old_path': '',
+        'status': 'M',
+        'similarity': 0,
+        'additions': 8,
+        'deletions': 0,
+        'binary': False},
+       {'path': 'gheasy/__init__.py',
+        'old_path': '',
+        'status': 'M',
+        'similarity': 0,
+        'additions': 1,
+        'deletions': 1,
+        'binary': False},
+       {'path': 'gheasy/_modidx.py',
+        'old_path': '',
+        'status': 'M',
+        'similarity': 0,
+        'additions': 152,
+        'deletions': 0,
+        'binary': False},
+       {'path': 'gheasy/core.py',
+        'old_path': '',
+        'status': 'M',
+        'similarity': 0,
+        'additions': 9,
+        'deletions': 7,
+        'binary': False},
+       {'path': 'gheasy/repo.py',
+        'old_path': '',
+        'status': 'A',
+        'similarity': 0,
+        'additions': 1659,
+        'deletions': 0,
+        'binary': False},
+       {'path': 'nbs/00_core.ipynb',
+        'old_path': '',
+        'status': 'M',
+        'similarity': 0,
+        'additions': 9,
+        'deletions': 7,
+        'binary': False},
+       {'path': 'nbs/02_repo.ipynb',
+        'old_path': '',
+        'status': 'A',
+        'similarity': 0,
+        'additions': 4298,
+        'deletions': 0,
+        'binary': False},
+       {'path': 'uv.lock',
+        'old_path': '',
+        'status': 'M',
+        'similarity': 0,
+        'additions': 1931,
+        'deletions': 2551,
+        'binary': False}],
+      'snapshot_alternative': None,
+      'commits': [{'oid': 'bc8bbb72c1003c9adcca87f3070cb8bdb8efb000',
+        'short': 'bc8bbb7',
+        'parents': ['ea046eeb5df51e5f0fac69276a1985bcbfa4f23e'],
+        'author': 'Claude',
+        'email': 'noreply@anthropic.com',
+        'timestamp': 1787690153,
+        'decoration': 'HEAD -> claude/ramabana-branching-review-uqj6v2, origin/claude/ramabana-branching-review-uqj6v2, origin/claude/ramabana-branching-notebook-nbnzye',
+        'signature': 'N',
+        'subject': 'Release 0.0.8'},
+       {'oid': 'ea046eeb5df51e5f0fac69276a1985bcbfa4f23e',
+        'short': 'ea046ee',
+        'parents': ['80bb02422f0bbe2ec6dcef2e74c641b19879ac16'],
+        'author': 'Claude',
+        'email': 'noreply@anthropic.com',
+        'timestamp': 1787690023,
+        'decoration': '',
+        'signature': 'N',
+        'subject': 'Add gheasy.repo: git repository operations as a literate notebook'}],
+      'summary': {'files': 8, 'additions': 8067, 'deletions': 2566, 'binary': 0},
+      'can_apply': False}}
+
+## Mutate with a way back
+
+Guarded mutations record a safepoint before they run. The result includes an `undo` token. Pass that token to `undo` to restore the earlier branch, commit, and uncommitted work.
+
+``` python
+result = repo.checkout('feature')
+print(result['summary'])
+repo.undo(result['undo'])
+
+# Apply the strategy selected after reviewing `divergence`.
+repo.sync(preview['recommended'])
+```
+
+## Review branches and commits
+
+`review` compares branch work from the merge base. `review_file` loads one changed file on demand. `commit_review` and `commit_file` provide the same view for one commit.
+
+``` python
+review = repo.review('main', 'claude/ramabana-branching-review-uqj6v2')
+review['summary'], review['commits']
+
+file_review = repo.review_file('main', 'claude/ramabana-branching-review-uqj6v2', review['files'][0]['path'])
+file_review['left'], file_review['right'], file_review['patch']
+```
+
+    ('# Release notes\n\n<!-- do not remove -->\n\n## 0.0.7\nghapi is async, so sync=True for now\n\n\n\n## 0.0.6\ngheasy new setup python requires to >=3.11\n\n\n\n## 0.0.5\npins python to 3.13, git workflows optional\n\n\n\n## 0.0.4\nnbdev pyproject to hatchling bugfix + cli addition\n\n\n\n## 0.0.3\nskills\n\n\n\n## 0.0.2\ngheasy makes git lfs, worfklows easy\n\n\n\n## 0.0.1\ninitial release\n\n\n',
+     "# Release notes\n\n<!-- do not remove -->\n\n## 0.0.8\n\nNew `gheasy.repo`: git repository operations, moved here from `ramabana.git`. One gateway that\nserialises every git process per repository, a safepoint before every mutation, and previews that\nrehearse a merge or a rebase without touching the worktree. `gheasy.core`'s own git calls now go\nthrough the same gateway.\n\n\n## 0.0.7\nghapi is async, so sync=True for now\n\n\n\n## 0.0.6\ngheasy new setup python requires to >=3.11\n\n\n\n## 0.0.5\npins python to 3.13, git workflows optional\n\n\n\n## 0.0.4\nnbdev pyproject to hatchling bugfix + cli addition\n\n\n\n## 0.0.3\nskills\n\n\n\n## 0.0.2\ngheasy makes git lfs, worfklows easy\n\n\n\n## 0.0.1\ninitial release\n\n\n",
+     "diff --git a/CHANGELOG.md b/CHANGELOG.md\nindex 54062f3..eb0aabf 100644\n--- a/CHANGELOG.md\n+++ b/CHANGELOG.md\n@@ -2,6 +2,14 @@\n \n <!-- do not remove -->\n \n+## 0.0.8\n+\n+New `gheasy.repo`: git repository operations, moved here from `ramabana.git`. One gateway that\n+serialises every git process per repository, a safepoint before every mutation, and previews that\n+rehearse a merge or a rebase without touching the worktree. `gheasy.core`'s own git calls now go\n+through the same gateway.\n+\n+\n ## 0.0.7\n ghapi is async, so sync=True for now\n \n")
+
+## Build a library pipeline
+
+This workflow runs lint, then tests, then publishes a release to PyPI:
 
 ``` python
 from gheasy.workflow import Workflow
@@ -101,10 +274,9 @@ print(wfb.build().to_yaml())
           - name: Publish
             uses: pypa/gh-action-pypi-publish@release/v1
 
-## App Pipeline
+## Build an application pipeline
 
-For web apps (FastHTML, Django, etc.) — test on every push, deploy to
-Fly.io on main. Uses the DSL directly for custom step logic:
+Use the workflow builder directly when a deployment needs custom steps. This example tests every push and deploys [`main`](https://vedicreader.github.io/gheasy/core.html#main) to Fly.io:
 
 ``` python
 wfb = Workflow("deploy")
@@ -148,12 +320,9 @@ print(wfb.build().to_yaml())
           - name: Deploy to Fly.io
             run: fly deploy --remote-only
 
-## Project setup: LFS & secrets
+## Configure LFS and secrets
 
-Not every project needs CI. Sometimes you just need git-lfs tracking and
-GitHub secrets synced from your local `.env`. For an app like
-[vedicreader](https://github.com/vedicreader) with media files and OAuth
-secrets:
+Projects can configure Git LFS and copy local environment values to GitHub secrets or variables:
 
 ``` python
 from gheasy.core import gh_lfs, gh_secrets_from_file, gh_push_env, GheasyConfig
@@ -179,7 +348,7 @@ import os
 gh_push_env(dict(os.environ))
 ```
 
-Or push everything from as secrets (no schema needed):
+Without a schema, [`gh_secrets_from_file`](https://vedicreader.github.io/gheasy/core.html#gh_secrets_from_file) sends every value in `.env` as a secret:
 
 ``` python
 # Push all KEY=VALUE pairs from .env as GitHub secrets
@@ -189,12 +358,9 @@ gh_secrets_from_file('.env')
 gh_secrets_from_file('.env', dry_run=True)
 ```
 
-## Cross-package pipeline
+## Build a cross-package pipeline
 
-gheasy generates workflows that call your own Python code. Here: a
-workflow that uses [dockeasy](https://github.com/karthik777/dockeasy) to
-generate a Dockerfile, then builds and pushes to GHCR — triggered only
-when the relevant source files change:
+Workflow steps can call code from another package. This example uses `dockeasy` to generate a Dockerfile, then builds and publishes the image when its source files change:
 
 ``` python
 wfb = Workflow("Build caddy-sqlite image")
