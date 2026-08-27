@@ -2,6 +2,9 @@
 
 <!-- do not remove -->
 
+## 0.0.9
+release
+
 ## 0.0.8
 
 New `gheasy.repo`: git repository operations, moved here from `ramabana.git`. One gateway that
@@ -42,5 +45,3 @@ gheasy makes git lfs, worfklows easy
 
 ## 0.0.1
 initial release
-
-
