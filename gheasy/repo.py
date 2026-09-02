@@ -16,9 +16,9 @@ from fastcore.all import L, Path, first, patch, uniqueify
 
 # %% auto #0
 __all__ = ['READS', 'NET', 'MIXED', 'BARE_READS', 'FOREIGN_LOCK', 'LOCK_ATTEMPTS', 'LOCK_BACKOFF', 'SAFEPOINT_REF',
-           'JOURNAL_NAME', 'JOURNAL_KEEP', 'LFS_MAGIC', 'SYNC_OPS', 'REMOTE_OPS', 'STATE_KEYS', 'GitError', 'classify',
-           'RepoLock', 'Safepoint', 'GitGateway', 'gateway', 'repo_root', 'url_name', 'clone_target', 'clone',
-           'shorten', 'GitRepo']
+           'JOURNAL_NAME', 'JOURNAL_KEEP', 'LFS_MAGIC', 'SYNC_OPS', 'REMOTE_OPS', 'STATE_KEYS', 'IGNORE_KINDS',
+           'GitError', 'classify', 'RepoLock', 'Safepoint', 'GitGateway', 'gateway', 'repo_root', 'url_name',
+           'clone_target', 'clone', 'shorten', 'GitRepo', 'project_kinds', 'missing_ignores', 'prepare_ignores']
 
 # %% ../nbs/02_repo.ipynb #cf35dd7c
 class GitError(RuntimeError): pass
@@ -1651,3 +1651,71 @@ def sync(self: GitRepo, how='rebase', upstream=''):
     args = {'fast-forward': ('merge', '--ff-only', ref), 'merge': ('merge', '--no-edit', ref),
             'rebase': ('rebase', ref), 'reset': ('reset', '--hard', ref)}[how]
     return self._guarded(how, lambda: self._attempt(*args), autostash=how in ('rebase', 'reset'))
+
+# %% ../nbs/02_repo.ipynb #a067d94c
+#: Per project kind: the files that say a folder is one, a path that must end up ignored, and the
+#: block to write when it does not.
+IGNORE_KINDS = {
+    'rust': dict(
+        markers=('Cargo.toml',), probes=('target/debug/build',),
+        lines=('# Rust', '/target/', '**/*.rs.bk')),
+    'maturin': dict(
+        markers=('pyproject.toml', 'Cargo.toml'), probes=('dist/x.whl',),
+        lines=('# Wheels built from this crate', '/dist/', '*.so', '*.pyd')),
+    'python': dict(
+        markers=('pyproject.toml', 'setup.py', 'setup.cfg'), probes=('__pycache__/x.pyc', '.venv/x'),
+        lines=('# Python', '__pycache__/', '*.py[cod]', '.venv/', 'venv/', '/build/',
+               '*.egg-info/', '.pytest_cache/', '.ipynb_checkpoints/')),
+    'node': dict(
+        markers=('package.json',), probes=('node_modules/x',),
+        lines=('# Node', 'node_modules/', '*.tsbuildinfo')),
+}
+
+#: `maturin` needs every marker; the rest need any one. A `pyproject.toml` beside a `Cargo.toml` is
+#: a Python package built from Rust, and its `dist/` holds wheels rather than an sdist.
+_ALL_MARKERS = ('maturin',)
+
+def project_kinds(folder):
+    "Which kinds of project this folder holds, by the files that declare one."
+    folder = Path(folder)
+    out = []
+    for kind, spec in IGNORE_KINDS.items():
+        hit = all if kind in _ALL_MARKERS else any
+        if hit((folder/m).exists() for m in spec['markers']): out.append(kind)
+    if 'maturin' in out and 'python' in out: out.remove('python')   # the same `dist/`, said twice
+    return out
+
+# %% ../nbs/02_repo.ipynb #226d40a7
+def _ignored(repo, path):
+    "Whether git already ignores this path."
+    try: rel = Path(path).resolve().relative_to(Path(repo.root).resolve())
+    except ValueError: return False
+    try: repo.run('check-ignore', '-q', '--no-index', str(rel))
+    except (GitError, OSError): return False
+    return True
+
+def missing_ignores(repo, folder):
+    "The `(kind, lines)` this folder needs and the repository does not already cover."
+    folder = Path(folder)
+    out = []
+    for kind in project_kinds(folder):
+        spec = IGNORE_KINDS[kind]
+        if all(_ignored(repo, folder/p) for p in spec['probes']): continue
+        out.append((kind, list(spec['lines'])))
+    return out
+
+# %% ../nbs/02_repo.ipynb #a5d49d77
+def prepare_ignores(repo, folder, write=True):
+    "Give `folder` the ignore rules its project kinds need, and say what was added."
+    missing = missing_ignores(repo, folder)
+    wanted = [l for _, lines in missing for l in lines]
+    target = Path(folder)/'.gitignore'
+    added = list(wanted)
+    if write and wanted:
+        old = target.read_text(encoding='utf-8').splitlines() if target.exists() else []
+        added = [l for l in wanted if l not in old]
+        if added:
+            head = old + ([''] if old and old[-1].strip() else [])
+            target.write_text('\n'.join(head + added) + '\n', encoding='utf-8')
+            _invalidate(repo.root)
+    return {'kinds': [k for k, _ in missing], 'added': added, 'path': str(target)}

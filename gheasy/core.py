@@ -11,7 +11,8 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any
 from ghapi.all import GhApi
-from fastcore.all import patch, filter_values, Path, filter_keys, in_, L, listify, not_, is_
+from fastcore.all import (patch, filter_values, Path, filter_keys, first, flexicache, in_, L, listify, not_,
+                          is_, time_policy)
 from .workflow import Workflow, JobBuilder, StepBuilder
 from .repo import GitError, gateway, url_name
 
@@ -22,9 +23,10 @@ __all__ = ['DEFAULT_PYTHON', 'FINDING_BRANCH_PROTECTION', 'FINDING_DEPENDABOT', 
            'FINDING_BUILD', 'FINDING_WORKFLOWS', 'app', 'EnvConfig', 'DeployOptions', 'GheasyConfig', 'cfg_path',
            'mk_deploy_job', 'mk_workflow', 'mk_gitattributes', 'mk_dependabot', 'mk_hook', 'nbdev_hook', 'gh_hooks',
            'gh_githooks_pre_commit', 'gh_lfs', 'gh_gitattributes', 'gh_protect', 'gh_topics', 'gh_secret',
-           'gh_push_env', 'gh_secrets_from_file', 'gh_deploy_key_setup', 'gh_init', 'gh_add_env', 'gh_add_job',
-           'gh_workflow', 'gh_status', 'gh_ship', 'gh_record_deploy', 'gh_setup', 'RepoFinding', 'gh_check', 'gh_apply',
-           'GheasyRepo', 'gh_pyproject_to_hatchling', 'repo_root', 'mv_skill_md', 'gh_new', 'main']
+           'gh_push_env', 'gh_secrets_from_file', 'gh_deploy_key_setup', 'pr_context', 'gh_init', 'gh_add_env',
+           'gh_add_job', 'gh_workflow', 'gh_status', 'gh_ship', 'gh_record_deploy', 'gh_setup', 'RepoFinding',
+           'gh_check', 'gh_apply', 'GheasyRepo', 'gh_pyproject_to_hatchling', 'repo_root', 'mv_skill_md', 'gh_new',
+           'main']
 
 # %% ../nbs/00_core.ipynb #f612e9c8e9711ae9
 @dataclass(frozen=True)
@@ -349,6 +351,38 @@ def _resolve_gh_repo_input(ref=None, path='.'):
     m = re.search(r'github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$', ref)
     if m: return m.group(1), m.group(2)
     raise ValueError(f'Cannot parse owner/repo from: {ref}')
+
+# %% ../nbs/00_core.ipynb #301398c4
+def _pr_api(path):
+    "`GhApi` bound to this repository's own owner and name, so the calls below need not repeat them."
+    try: owner, name, api = _gh_api(token=_resolve_gh_token(), path=path)
+    except ValueError as e: raise GitError(f'this repository has no GitHub remote ({e})') from e
+    return api, owner, name
+
+def _checks(api, sha):
+    "Check runs for one commit, as counts and the names that are not green."
+    try: runs = api.checks.list_for_ref(sha, per_page=100)['check_runs']
+    except Exception: return {}
+    bad = [r['name'] for r in runs if r['conclusion'] not in (None, 'success', 'neutral', 'skipped')]
+    return {'total': len(runs), 'failing': bad[:12],
+            'pending': sum(1 for r in runs if r['status'] != 'completed')}
+
+@flexicache(time_policy(60), maxsize=32)
+def pr_context(path, branch):
+    "A branch's pull request, its base, how far that base has moved, and how its checks stand."
+    try:
+        api, owner, name = _pr_api(path)
+        pr = first(api.pulls.list(head=f'{owner}:{branch}', state='open', per_page=5))
+        if pr is None: return {'pr': None, 'note': f'no open pull request for {branch}'}
+        cmp = api.repos.compare_commits(f"{pr['base']['ref']}...{branch}")
+        return {'note': '', 'pr': {
+            'number': pr['number'], 'title': pr['title'], 'url': pr['html_url'],
+            'base': pr['base']['ref'], 'draft': bool(pr.get('draft')),
+            'mergeable_state': pr.get('mergeable_state') or '',
+            'behind_base': cmp['behind_by'], 'ahead_of_base': cmp['ahead_by'],
+            'checks': _checks(api, pr['head']['sha'])}}
+    except Exception as e:
+        return {'pr': None, 'note': f'GitHub: {e}'}
 
 # %% ../nbs/00_core.ipynb #d0a93de85b941902
 def gh_init(name, host, domain, env='prod', branch=None, srv_path='/srv/app',
