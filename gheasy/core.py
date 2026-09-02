@@ -22,11 +22,11 @@ DEFAULT_PYTHON = '3.13'  # `uv python pin` target for newly scaffolded projects
 __all__ = ['DEFAULT_PYTHON', 'FINDING_BRANCH_PROTECTION', 'FINDING_DEPENDABOT', 'FINDING_TOPICS', 'FINDING_LFS', 'FINDING_HOOKS',
            'FINDING_BUILD', 'FINDING_WORKFLOWS', 'app', 'EnvConfig', 'DeployOptions', 'GheasyConfig', 'cfg_path',
            'mk_deploy_job', 'mk_workflow', 'mk_gitattributes', 'mk_dependabot', 'mk_hook', 'nbdev_hook', 'gh_hooks',
-           'gh_githooks_pre_commit', 'gh_lfs', 'gh_gitattributes', 'gh_protect', 'gh_topics', 'gh_secret',
-           'gh_push_env', 'gh_secrets_from_file', 'gh_deploy_key_setup', 'pr_context', 'gh_init', 'gh_add_env',
-           'gh_add_job', 'gh_workflow', 'gh_status', 'gh_ship', 'gh_record_deploy', 'gh_setup', 'RepoFinding',
-           'gh_check', 'gh_apply', 'GheasyRepo', 'gh_pyproject_to_hatchling', 'repo_root', 'mv_skill_md', 'gh_new',
-           'main']
+           'gh_githooks_pre_commit', 'gh_lfs', 'gh_gitattributes', 'gh_token', 'gh_api', 'gh_protect', 'gh_topics',
+           'gh_secret', 'gh_push_env', 'gh_secrets_from_file', 'gh_deploy_key_setup', 'pr_context', 'gh_init',
+           'gh_add_env', 'gh_add_job', 'gh_workflow', 'gh_status', 'gh_ship', 'gh_record_deploy', 'gh_setup',
+           'RepoFinding', 'gh_check', 'gh_apply', 'GheasyRepo', 'gh_pyproject_to_hatchling', 'repo_root', 'mv_skill_md',
+           'gh_new', 'main']
 
 # %% ../nbs/00_core.ipynb #f612e9c8e9711ae9
 @dataclass(frozen=True)
@@ -262,7 +262,7 @@ def gh_gitattributes(path='.'):
     ga_path.write_text(new_content)
 
 # %% ../nbs/00_core.ipynb #6a1565aa0735813d
-def _resolve_gh_token(token=None):
+def gh_token(token=None):
     "Tiered resolution: explicit > GITHUB_TOKEN env"
     return token or os.getenv('GITHUB_TOKEN')
 
@@ -274,7 +274,7 @@ def _get_repo_slug(path='.'):
     if not owner or not url_name(url): raise ValueError(f'Cannot parse owner/repo from remote: {url}')
     return owner.group(1), url_name(url)
 
-def _gh_api(token=None, path='.'):
+def gh_api(token=None, path='.'):
     "Return (owner, repo_name, GhApi) instance."
     # ghapi builds async ops unless asked; nothing here awaits, so async would orphan every call
     owner, repo = _get_repo_slug(path)
@@ -283,7 +283,7 @@ def _gh_api(token=None, path='.'):
 def gh_protect(branch='main', require_reviews=1, dismiss_stale=True, require_status_checks=('test',),
            enforce_admins=False, allow_force_pushes=False, token=None, path='.'):
     "Set branch protection rules via ghapi. Requires token with repo admin scope."
-    owner, repo, api = _gh_api(token or _resolve_gh_token(), path)
+    owner, repo, api = gh_api(token or gh_token(), path)
     rsc = dict(strict=True, contexts=listify(require_status_checks))
     rprr=dict(required_approving_review_count=require_reviews, dismiss_stale_reviews=dismiss_stale)
     api.repos.update_branch_protection(branch=branch, enforce_admins=enforce_admins, required_status_checks=rsc,
@@ -291,7 +291,7 @@ def gh_protect(branch='main', require_reviews=1, dismiss_stale=True, require_sta
 
 def gh_topics(topics, token=None, path='.'):
     "Replace repo topics. GitHub enforces lowercase."
-    owner, repo, api = _gh_api(_resolve_gh_token(token), path)
+    owner, repo, api = gh_api(gh_token(token), path)
     api.repos.replace_all_topics(names=[t.lower() for t in topics])
 
 # %% ../nbs/00_core.ipynb #4c7885e278b5f879
@@ -355,7 +355,7 @@ def _resolve_gh_repo_input(ref=None, path='.'):
 # %% ../nbs/00_core.ipynb #301398c4
 def _pr_api(path):
     "`GhApi` bound to this repository's own owner and name, so the calls below need not repeat them."
-    try: owner, name, api = _gh_api(token=_resolve_gh_token(), path=path)
+    try: owner, name, api = gh_api(token=gh_token(), path=path)
     except ValueError as e: raise GitError(f'this repository has no GitHub remote ({e})') from e
     return api, owner, name
 
@@ -425,7 +425,7 @@ def gh_workflow(token=None, path='.'):
     print(f'Workflow written to {wf_path}')
     if token:
         import base64
-        owner, repo, api = _gh_api(token, path)
+        owner, repo, api = gh_api(token, path)
         content = base64.b64encode(wf_str.encode()).decode()
         try:
             existing = api.repos.get_content(path='.github/workflows/gheasy.yml')
@@ -540,10 +540,10 @@ def gh_check(owner=None, repo=None, token=None, path='.', remote=True, local=Tru
             else: chks.append(RepoFinding('warn', FINDING_BUILD, 'pyproject.toml not using hatchling',
                 fix=lambda: gh_pyproject_to_hatchling(path=path), cmd_repr='gh_pyproject_to_hatchling()'))
 
-    if remote and (token or _resolve_gh_token()):
+    if remote and (token or gh_token()):
         try:
             if owner is None or repo is None: owner, repo = _get_repo_slug(path)
-            api = GhApi(owner=owner, repo=repo, token=token or _resolve_gh_token(), sync=True)
+            api = GhApi(owner=owner, repo=repo, token=token or gh_token(), sync=True)
             repo_data = api.repos.get()
             if repo_data.topics: chks.append(RepoFinding('ok', FINDING_TOPICS, f'Topics set: {repo_data.topics}'))
             else: chks.append(RepoFinding('warn', FINDING_TOPICS, 'No topics set', cmd_repr='gh_topics([...])'))
@@ -593,7 +593,7 @@ class GheasyRepo:
         return gh_apply(findings, dry_run=dry_run, confirm=confirm)
 
     def create(self, private=True, description='', auto_init=False):
-        api = GhApi(token=self.token or _resolve_gh_token(), sync=True)
+        api = GhApi(token=self.token or gh_token(), sync=True)
         return api.repos.create_for_authenticated_user(
             name=self._repo, private=private,
             description=description, auto_init=auto_init)
@@ -603,7 +603,7 @@ class GheasyRepo:
             token=None, parent_dir='.', topics=None, workflows=None, python=DEFAULT_PYTHON):
         "Full project scaffold: create repo, clone, configure, push."
         owner, repo = _resolve_gh_repo_input(ref)
-        inst = cls(ref=ref, token=token or _resolve_gh_token())
+        inst = cls(ref=ref, token=token or gh_token())
         inst.create(private=private, description=description)
         local_path = Path(parent_dir) / repo
         if not (local_path / '.git').exists(): sp.run(['git', 'clone', f'https://github.com/{owner}/{repo}', str(local_path)], check=True)

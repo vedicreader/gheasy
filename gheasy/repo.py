@@ -18,7 +18,8 @@ from fastcore.all import L, Path, first, patch, uniqueify
 __all__ = ['READS', 'NET', 'MIXED', 'BARE_READS', 'FOREIGN_LOCK', 'LOCK_ATTEMPTS', 'LOCK_BACKOFF', 'SAFEPOINT_REF',
            'JOURNAL_NAME', 'JOURNAL_KEEP', 'LFS_MAGIC', 'SYNC_OPS', 'REMOTE_OPS', 'STATE_KEYS', 'IGNORE_KINDS',
            'GitError', 'classify', 'RepoLock', 'Safepoint', 'GitGateway', 'gateway', 'repo_root', 'url_name',
-           'clone_target', 'clone', 'shorten', 'GitRepo', 'project_kinds', 'missing_ignores', 'prepare_ignores']
+           'clone_target', 'clone', 'invalidate', 'plural', 'shorten', 'unborn', 'GitRepo', 'project_kinds',
+           'missing_ignores', 'prepare_ignores']
 
 # %% ../nbs/02_repo.ipynb #cf35dd7c
 class GitError(RuntimeError): pass
@@ -374,7 +375,8 @@ def _cached(root, key, make):
     with _CACHE_LOCK: _CACHE[cache_key] = (time.monotonic(), value)
     return value
 
-def _invalidate(root):
+def invalidate(root):
+    "Drop every cached answer for `root`, after something wrote to it."
     root = str(root)
     with _CACHE_LOCK:
         for key in [k for k in _CACHE if k[0] == root]: _CACHE.pop(key, None)
@@ -399,7 +401,7 @@ def _track_counts(track):
     counts = dict(re.findall(r'(ahead|behind) (\d+)', track or ''))
     return int(counts.get('ahead', 0)), int(counts.get('behind', 0))
 
-def _plural(n, word):
+def plural(n, word):
     "Return a count with a singular or plural noun."
     return f'{n} {word}' + ('' if n == 1 else 's')
 
@@ -408,7 +410,7 @@ def shorten(text, limit):
     text = ' '.join(str(text or '').split())
     return text if len(text) <= limit else text[:limit - 1] + '…'
 
-def _unborn(oid):
+def unborn(oid):
     "Return whether `oid` is Git's all-zero object ID."
     return set(str(oid)) == {'0'}
 
@@ -424,11 +426,11 @@ def _summarise(out):
     "Summarize a mutation outcome in one sentence."
     op, staged, conflicted = out['op'], len(out['staged']), len(out['conflicted'])
     if conflicted:
-        return f'{op} stopped at {_plural(conflicted, "conflicted file")} -- resolve them to continue'
+        return f'{op} stopped at {plural(conflicted, "conflicted file")} -- resolve them to continue'
     if out['operation']['active']:
         return f'{out["operation"]["active"]} is in progress -- continue, skip, or abort it'
     if staged and not out['moved']:
-        return f'{op} staged {_plural(staged, "file")} without committing -- commit to finish'
+        return f'{op} staged {plural(staged, "file")} without committing -- commit to finish'
     if out['moved']:
         return f'{op} moved this branch to {out["head"]}'
     return out['message'].splitlines()[0] if out['message'] else f'{op} changed nothing'
@@ -525,7 +527,7 @@ def _mutate(self:GitRepo, *args, **kwargs):
     try:
         return self.run(*args, **kwargs)
     finally:
-        _invalidate(self.root)
+        invalidate(self.root)
 
 @patch
 def _gitdir(self:GitRepo):
@@ -664,7 +666,7 @@ def _attempt(self:GitRepo, *args, **kwargs):
     try:
         p = _run(self.root, *args, **kwargs)
     finally:
-        _invalidate(self.root)
+        invalidate(self.root)
     text = '\n'.join(x for x in ((p.stdout or '').strip(), (p.stderr or '').strip()) if x)
     if not p.returncode:
         return text
@@ -683,9 +685,9 @@ def _guarded(self:GitRepo, op, call, autostash=False):
         except GitError as e:
             failure = e
         finally:
-            _invalidate(self.root)
+            invalidate(self.root)
         note = self._bring_back(aside) if aside else ''
-        _invalidate(self.root)
+        invalidate(self.root)
         if failure is not None:
             if note:
                 raise GitError(f'{failure}\n\n{note}') from failure
@@ -716,7 +718,7 @@ def _outcome(self:GitRepo, op, point, message='', note='', set_aside=False):
 def undo(self:GitRepo, token=''):
     "Put this repository back where the named safepoint says it was."
     outcome = gateway().undo(self.root, token)
-    _invalidate(self.root)
+    invalidate(self.root)
     return outcome
 
 @patch
@@ -811,7 +813,7 @@ def ignore(self:GitRepo, path, directory=False):
     lines = target.read_text(encoding='utf-8').splitlines() if target.exists() else []
     if rule not in lines:
         target.write_text('\n'.join(lines + [rule]) + '\n', encoding='utf-8')
-        _invalidate(self.root)
+        invalidate(self.root)
     return {'path': str(target), 'rule': rule}
 
 @patch
@@ -823,7 +825,7 @@ def write_worktree(self:GitRepo, path, content):
     if not target.parent.exists():
         raise GitError(f'the parent directory for {path} does not exist')
     target.write_text(str(content), encoding='utf-8')
-    _invalidate(self.root)
+    invalidate(self.root)
 
 @patch
 def apply_patch(self:GitRepo, patch, staged=True, reverse=False):
@@ -1050,7 +1052,7 @@ def _fetch_time(self:GitRepo):
 @patch
 def brief(self:GitRepo, fresh=False):
     "One repository as a single row: branch, drift, dirt, and how far past its last tag."
-    if fresh: _invalidate(self.root)
+    if fresh: invalidate(self.root)
     def collect():
         branch = self.run('branch', '--show-current').strip()
         detached = not branch
@@ -1305,7 +1307,7 @@ def resolve_conflict(self:GitRepo, path, choice, content=None):
     remaining = [c['path'] for c in self._changes_uncached() if c['conflicted']]
     return {'path': path, 'choice': choice, 'conflicted': remaining,
         'operation': self._operation(),
-        'summary': f'{_plural(len(remaining), "file")} still conflicted' if remaining else
+        'summary': f'{plural(len(remaining), "file")} still conflicted' if remaining else
             'every conflict is resolved -- commit to finish the merge'}
 
 # %% ../nbs/02_repo.ipynb #4d6e8d51
@@ -1635,7 +1637,7 @@ def divergence(self: GitRepo, upstream='', fetch=False):
          'conflicts': replay_conflicts, 'conflict_likely': bool(stops), 'stops_at': stops,
          'replayed': replayed, 'note': 'a linear history, rewritten, and a conflict per commit'},
         {'op': 'reset', 'available': bool(behind), 'destructive': True,
-         'note': f'throw away {_plural(ahead, "commit")} and take the upstream as it is'}]
+         'note': f'throw away {plural(ahead, "commit")} and take the upstream as it is'}]
     recommended = ('' if relation in ('identical', 'ahead') else 'fast-forward' if not ahead else
                    'merge' if stops or not blocked['clean'] else 'rebase')
     return {'branch': branch, 'upstream': upstream, 'relation': relation, 'ahead': ahead,
@@ -1717,5 +1719,5 @@ def prepare_ignores(repo, folder, write=True):
         if added:
             head = old + ([''] if old and old[-1].strip() else [])
             target.write_text('\n'.join(head + added) + '\n', encoding='utf-8')
-            _invalidate(repo.root)
+            invalidate(repo.root)
     return {'kinds': [k for k, _ in missing], 'added': added, 'path': str(target)}
