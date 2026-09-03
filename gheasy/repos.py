@@ -231,7 +231,8 @@ def find_repos(base, query='', limit=60, depth=6):
     q, out, seen = str(query or '').strip().lower(), [], set()
     def take(repo):
         key = str(repo)
-        if key in seen or (q and q not in repo.name.lower() and q not in key.lower()): return
+        rel = os.path.relpath(key, base).lower()   # relative to `base`: an ancestor's name is not a match
+        if key in seen or (q and q not in repo.name.lower() and q not in rel): return
         seen.add(key)
         out.append(repo)
     exe = shutil.which('rg')
