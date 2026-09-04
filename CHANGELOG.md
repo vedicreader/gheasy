@@ -3,12 +3,7 @@
 <!-- do not remove -->
 
 ## 0.0.10
-
-Six helpers Leela was importing through the underscore are public and exported. `gheasy.repo` gains
-`invalidate`, `plural` and `unborn`; `gheasy.core` gains `gh_api` and `gh_token`; `gheasy.workflow`
-gains `yaml_instance`. The private spellings are gone: an embedder reading what gheasy wrote needs
-the same ruamel settings and the same cache invalidation, and neither was reachable by name.
-
+repos management for leela
 
 ## 0.0.9
 release

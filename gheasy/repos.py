@@ -63,11 +63,8 @@ def discover(roots, extra=(), hidden=()):
     for folder in roots:
         folder = Path(folder).expanduser().resolve()
         take(repo_root(folder))
-        try:
-            children = sorted((c for c in folder.iterdir() if c.is_dir() and not c.name.startswith('.')),
-                key=lambda c: c.name.lower())
-        except OSError:
-            children = []
+        try: children = sorted((c for c in folder.iterdir() if c.is_dir() and not c.name.startswith('.')), key=lambda c: c.name.lower())
+        except OSError: children = []
         for child in children:
             if (child/'.git').exists(): take(child)
         for entry in _members_file(folder): take(_member_root(entry, folder))
@@ -129,8 +126,7 @@ def remove(self:RepoSet, path):
     root = self.require(path)
     state = self._state()
     state['extra'] = [e for e in (state.get('extra') or []) if e != str(root)]
-    if root in discover(self.roots, state['extra']):
-        state['hidden'] = sorted({*(state.get('hidden') or []), str(root)})
+    if root in discover(self.roots, state['extra']): state['hidden'] = sorted({*(state.get('hidden') or []), str(root)})
     self._save(state)
     return root
 
@@ -144,17 +140,13 @@ def _fan(items, work):
 def overview(self:RepoSet, expect=''):
     "Every repository as one row, plus what the workspace looks like as a whole."
     def brief(path):
-        try:
-            return GitRepo(path).brief()
-        except (GitError, OSError) as e:
-            return {'root': str(path), 'name': Path(path).name, 'error': str(e),
-                'branch': '', 'clean': True, 'changed': 0, 'ahead': 0, 'behind': 0,
-                'unreleased': None}
+        try: return GitRepo(path).brief()
+        except (GitError, OSError) as e: return {'root': str(path), 'name': Path(path).name, 'error': str(e), 'branch': '', 'clean': True,
+                     'changed': 0, 'ahead': 0, 'behind': 0, 'unreleased': None}
     rows = _fan(self.paths(), brief)
     named = [r['branch'] for r in rows if r.get('branch') and not r.get('error')]
     expected = str(expect or '').strip() or (Counter(named).most_common(1)[0][0] if named else '')
-    for row in rows:
-        row['off_branch'] = bool(expected) and not row.get('error') and row['branch'] != expected
+    for row in rows: row['off_branch'] = bool(expected) and not row.get('error') and row['branch'] != expected
     return {
         'repos': rows, 'expected_branch': expected, 'roots': [str(r) for r in self.roots],
         'summary': {
@@ -200,16 +192,13 @@ def clone(self:RepoSet, urls, into=None):
     "Clone repositories into an open folder, in parallel, and say where each landed."
     parent = Path(str(into)).expanduser().resolve() if into else (self.roots[0] if self.roots else None)
     if parent is None: raise GitError('open a folder to clone into')
-    if not any(parent == r or parent.is_relative_to(r) for r in self.roots):
-        raise GitError(f'{parent} is outside the open folders')
+    if not any(parent == r or parent.is_relative_to(r) for r in self.roots): raise GitError(f'{parent} is outside the open folders')
     specs = [s for s in (str(u).strip() for u in (urls or ())) if s]
     if not specs: raise GitError('give at least one repository to clone')
     def act(spec):
         row = {'spec': spec, 'ok': True, 'skipped': '', 'output': ''}
-        try:
-            return row | {'root': str(git_clone(clone_url(spec), parent)), 'output': 'cloned'}
-        except (GitError, OSError) as e:
-            return row | {'ok': False, 'error': str(e)}
+        try: return row | {'root': str(git_clone(clone_url(spec), parent)), 'output': 'cloned'}
+        except (GitError, OSError) as e: return row | {'ok': False, 'error': str(e)}
     return _fan(specs, act)
 
 # %% ../nbs/03_repos.ipynb #eea0a888
@@ -237,21 +226,17 @@ def find_repos(base, query='', limit=60, depth=6):
         out.append(repo)
     exe = shutil.which('rg')
     if exe:
+        go = ('.git/objects', '.git/logs', 'node_modules', '.venv', 'venv', '.cache', 'Library', '.Trash', 'site-packages', '__pycache__')
         # `--max-depth` counts files, and a repository's marker is `<repo>/.git/HEAD`, two below it.
-        cmd = [exe, '--files', '--hidden', '--no-ignore', '--no-messages',
-            '--max-depth', str(int(depth) + 2), '-g', '**/.git/HEAD', '-g', '**/.git',
-            *[g for d in ('.git/objects', '.git/logs', 'node_modules', '.venv', 'venv',
-                '.cache', 'Library', '.Trash', 'site-packages', '__pycache__')
-                for g in ('-g', f'!**/{d}')],
-            str(base)]
+        cmd = [exe, '--files', '--hidden', '--no-ignore', '--no-messages', '--max-depth', str(int(depth) + 2), '-g', '**/.git/HEAD', '-g', '**/.git',
+            *[g for d in go for g in ('-g', f'!**/{d}')], str(base)]
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
             for line in (p.stdout or '').splitlines():
                 hit = Path(line)
                 repo = hit.parent.parent if hit.name == 'HEAD' else hit.parent
                 if repo.is_dir(): take(repo)
-        except (OSError, subprocess.SubprocessError):
-            exe = None
+        except (OSError, subprocess.SubprocessError): exe = None
     if not exe:
         for cur, dirs, _ in os.walk(base):
             here = Path(cur)
