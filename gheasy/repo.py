@@ -8,6 +8,7 @@ Docs: https://vedicreader.github.io/gheasy/repo.html.md"""
 from __future__ import annotations
 
 import difflib, json, re, shlex, shutil, subprocess, threading, time
+from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from urllib.parse import urlparse
@@ -103,6 +104,8 @@ class RepoLock:
                     self._writer = None
                     self._cv.notify_all()
     
+    def _holds_write(self): return self._writer == threading.get_ident()
+
     @contextmanager
     def net(self):
         with self._net: yield
@@ -210,8 +213,10 @@ def out(self:GitGateway, cwd, *args, **kwargs):
 # %% ../nbs/02_repo.ipynb #16b51391
 @patch
 def _git_dir(self:GitGateway, root):
-    d = Path(self.out(root, 'rev-parse', '--git-dir').strip())
-    return d if d.is_absolute() else root/d
+    def find():
+        d = Path(self.out(root, 'rev-parse', '--git-dir').strip())
+        return d if d.is_absolute() else Path(root)/d
+    return self.memo(root, 'gitdir', find)
 
 @patch
 def _journal_path(self:GitGateway, root):
@@ -361,24 +366,33 @@ def _conflict_blocks(text):
     return out
 
 # %% ../nbs/02_repo.ipynb #f1b6c4ec
-_CACHE, _CACHE_LOCK = {}, threading.RLock()
+_CACHE, _CACHE_LOCK, _GEN = {}, threading.RLock(), {}
 
 _CACHE_TTL = .45
 
+def _gen(root):
+    with _CACHE_LOCK: return _GEN.get(str(root), 0)
+
+def _store(root, key, value, gen):
+    "Cache `value` unless `root` was invalidated after generation `gen` began computing it."
+    with _CACHE_LOCK:
+        if _GEN.get(str(root), 0) == gen: _CACHE[(str(root), key)] = (time.monotonic(), value)
+
 def _cached(root, key, make):
     cache_key = (str(root), key)
-    now = time.monotonic()
     with _CACHE_LOCK:
         hit = _CACHE.get(cache_key)
-        if hit and now - hit[0] < _CACHE_TTL: return hit[1]
+        if hit and time.monotonic() - hit[0] < _CACHE_TTL: return hit[1]
+        gen = _GEN.get(str(root), 0)
     value = make()
-    with _CACHE_LOCK: _CACHE[cache_key] = (time.monotonic(), value)
+    _store(root, key, value, gen)
     return value
 
 def invalidate(root):
     "Drop every cached answer for `root`, after something wrote to it."
     root = str(root)
     with _CACHE_LOCK:
+        _GEN[root] = _GEN.get(root, 0) + 1
         for key in [k for k in _CACHE if k[0] == root]: _CACHE.pop(key, None)
 
 # %% ../nbs/02_repo.ipynb #a34a23ee
@@ -530,9 +544,7 @@ def _mutate(self:GitRepo, *args, **kwargs):
         invalidate(self.root)
 
 @patch
-def _gitdir(self:GitRepo):
-    git_dir = Path(self.run('rev-parse', '--git-dir').strip())
-    return git_dir if git_dir.is_absolute() else self.root/git_dir
+def _gitdir(self:GitRepo): return gateway()._git_dir(self.root)
 
 @patch
 def _version(self:GitRepo, path, where):
@@ -1008,41 +1020,58 @@ def set_remote(self:GitRepo, name, url, push=False): self._mutate('remote', 'set
 def remove_remote(self:GitRepo, name): self._mutate('remote', 'remove', name)
 
 # %% ../nbs/02_repo.ipynb #4330cf87
+_POOL, _POOL_LOCK, _POOL_NAME = None, threading.Lock(), 'gheasy-info'
+
+def _pool():
+    "The workers `info` collects on, shared so concurrent callers do not multiply forks."
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is None: _POOL = ThreadPoolExecutor(4, thread_name_prefix=_POOL_NAME)
+        return _POOL
+
+def _gather(jobs, serial):
+    "Run each of `jobs`; raise the first failure in their order, after all have finished."
+    if serial: return {k: f() for k, f in jobs.items()}
+    futs = {k: _pool().submit(f) for k, f in jobs.items()}
+    wait(futs.values())
+    return {k: f.result() for k, f in futs.items()}
+
 @patch
 def info(self:GitRepo):
     def collect():
-        branch = self.run('branch', '--show-current').strip()
-        oid = self._ask('rev-parse', '--short', 'HEAD')
-        if not branch:
-            branch = (oid + ' (detached)') if oid else 'HEAD (unborn)'
-        upstream_name, ahead, behind = self._tracking()
-        changes = self._changes_uncached()
-        stashes = [{'ref': ref, 'subject': subject, 'timestamp': int(stamp or 0)}
-            for ref, subject, stamp in
-            (_fields(l, 3) for l in self.run('stash', 'list', '--format=%gd%x00%gs%x00%ct').splitlines())]
+        gen, gw = _gen(self.root), gateway()
+        gw.env(self.root); self._gitdir()
         tag_fmt = '%(refname:short)%00%(objectname:short)%00%(creatordate:unix)%00%(subject)'
+        serial = gw._lock(self.root)._holds_write() or threading.current_thread().name.startswith(_POOL_NAME)
+        d = _gather(dict(
+            branch=lambda: self.run('branch', '--show-current').strip(),
+            head=lambda: self._ask('rev-parse', '--short', 'HEAD'),
+            tracking=self._tracking, changes=self._changes_uncached,
+            stashes=lambda: self.run('stash', 'list', '--format=%gd%x00%gs%x00%ct'),
+            tags=lambda: self.run('tag', '-l', f'--format={tag_fmt}', '--sort=-creatordate'),
+            branches=self._branches, remotes=self._remotes, operation=self._operation,
+            fetched_at=self._fetch_time, filters=self.filter_health, safepoints=self.safepoints), serial)
+        branch, oid, changes = d['branch'], d['head'], d['changes']
+        if not branch: branch = (oid + ' (detached)') if oid else 'HEAD (unborn)'
+        upstream_name, ahead, behind = d['tracking']
+        stashes = [{'ref': ref, 'subject': subject, 'timestamp': int(stamp or 0)}
+            for ref, subject, stamp in (_fields(l, 3) for l in d['stashes'].splitlines())]
         tag_details = [{'name': name, 'oid': tag_oid, 'timestamp': int(stamp or 0), 'subject': subject}
-            for name, tag_oid, stamp, subject in (_fields(l, 4) for l in
-            self.run('tag', '-l', f'--format={tag_fmt}', '--sort=-creatordate').splitlines()[:100])]
+            for name, tag_oid, stamp, subject in (_fields(l, 4) for l in d['tags'].splitlines()[:100])]
+        _store(self.root, 'changes', changes, gen)
         return {
             'root': str(self.root), 'branch': branch, 'head': oid, 'upstream': upstream_name,
             'ahead': ahead, 'behind': behind, 'clean': not changes, 'changes': changes,
-            'branches': self._branches(), 'remotes': self._remotes(), 'stashes': stashes,
+            'branches': d['branches'], 'remotes': d['remotes'], 'stashes': stashes,
             'tags': [tag['name'] for tag in tag_details], 'tag_details': tag_details,
-            'operation': self._operation(), 'fetched_at': self._fetch_time(),
-            'filters': self.filter_health(),
-            'safepoints': self.safepoints()[:12],
+            'operation': d['operation'], 'fetched_at': d['fetched_at'],
+            'filters': d['filters'], 'safepoints': d['safepoints'][:12],
         }
-    value = _cached(self.root, 'info', collect)
-    with _CACHE_LOCK:
-        _CACHE[(str(self.root), 'changes')] = (time.monotonic(), value['changes'])
-    return value
+    return _cached(self.root, 'info', collect)
 
 @patch
 def _fetch_time(self:GitRepo):
-    fetch_head = Path(self.run('rev-parse', '--git-path', 'FETCH_HEAD').strip())
-    if not fetch_head.is_absolute():
-        fetch_head = self.root/fetch_head
+    fetch_head = self._gitdir()/'FETCH_HEAD'
     try:
         return int(fetch_head.stat().st_mtime)
     except OSError:
