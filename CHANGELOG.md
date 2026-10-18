@@ -2,6 +2,10 @@
 
 <!-- do not remove -->
 
+## 0.0.12
+- `gh_new` / `GheasyRepo.create` make an org's repo in the org; they made it under the signed-in user.
+- `gh_workflow` takes the list of workflow names `gh_init` stores.
+
 ## 0.0.11
 `GitRepo.info` runs its git commands on a shared pool of four threads. It runs them serially when the calling thread holds the repository's write lock or is itself a pool worker. A failure raises the same error the serial order raised first. `invalidate` now starts a new cache generation, and an answer begun before it is not cached. `info` seeds the `decorations` cache only when it computed a new answer. The git directory is looked up once per repository and cached for 60 seconds.
 
