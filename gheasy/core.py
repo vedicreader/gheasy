@@ -116,9 +116,10 @@ _preset = {'python': {}, 'fasthtml': {}, 'rust': {'rust': True}, 'go': {'go': Tr
 'fastapi-react': {'node': True}, 'nodejs': {'node': True}}
 
 def _res_wfs(cfg):
-    "Merge preset defaults with explicit cfg.workflows (explicit always wins)."
+    "Merge preset defaults with explicit cfg.workflows (explicit always wins); a list of names turns each on."
     base = _preset.get(cfg.workflow_preset, {}) if cfg.workflow_preset else {}
-    return {**base, **cfg.workflows}
+    wfs = cfg.workflows or {}
+    return {**base, **(dict.fromkeys(wfs, True) if isinstance(wfs, (list, tuple)) else wfs)}
 
 def mk_deploy_job(env_name, cfg, wfb, cmd=None):
     "Add deploy job for env_name to wfb using DSL. Returns None (with warning) if no deploy cmd."
@@ -593,10 +594,11 @@ class GheasyRepo:
         return gh_apply(findings, dry_run=dry_run, confirm=confirm)
 
     def create(self, private=True, description='', auto_init=False):
+        "Create the repo under its owner: an org through `create_in_org`, else the signed-in user."
         api = GhApi(token=self.token or gh_token(), sync=True)
-        return api.repos.create_for_authenticated_user(
-            name=self._repo, private=private,
-            description=description, auto_init=auto_init)
+        kw = dict(name=self._repo, private=private, description=description, auto_init=auto_init)
+        if self._owner and self._owner.lower() != api.users.get_authenticated().login.lower(): return api.repos.create_in_org(org=self._owner, **kw)
+        return api.repos.create_for_authenticated_user(**kw)
 
     @classmethod
     def new(cls, ref, template='nbdev', private=True, description='',
