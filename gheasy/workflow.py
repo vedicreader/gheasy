@@ -618,8 +618,8 @@ def node_job(self:WorkflowBuilder) -> WorkflowBuilder:
 
 @patch
 def rust_job(self:WorkflowBuilder) -> WorkflowBuilder:
-    "Add a `build` job that runs cargo build, cargo test and cargo clippy with warnings as errors."
-    (self.job('build')
+    "Add a `rust` job that runs cargo build, cargo test and cargo clippy with warnings as errors."
+    (self.job('rust')
         .runs_on('ubuntu-latest')
         .checkout().end_step()
         .step('Rust toolchain').uses('dtolnay/rust-toolchain@stable').end_step()
@@ -628,8 +628,8 @@ def rust_job(self:WorkflowBuilder) -> WorkflowBuilder:
 
 @patch
 def go_job(self:WorkflowBuilder) -> WorkflowBuilder:
-    "Add a `build` job that installs Go 1.22 and runs go build, go test and go vet."
-    (self.job('build')
+    "Add a `go` job that installs Go 1.22 and runs go build, go test and go vet."
+    (self.job('go')
         .runs_on('ubuntu-latest')
         .checkout().end_step()
         .step('Setup Go').uses('actions/setup-go@v5').with_(go_version='1.22').end_step()

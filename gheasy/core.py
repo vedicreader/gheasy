@@ -188,9 +188,9 @@ def mk_gitattributes(patterns):
 
 def mk_dependabot(ecosystems=('pip', 'github-actions'), schedule='weekly', assignees=None, lbls=None):
     'Return the text of a `.github/dependabot.yml` that checks `ecosystems` for updates every `schedule`.'
-    opt = dict(assignees=listify(assignees)) if assignees else {} | dict(labels=listify(lbls)) if lbls else {}
+    opt = {k:listify(v) for k,v in dict(assignees=assignees, labels=lbls).items() if v}
     def upd(eco): return {'package-ecosystem': eco, 'directory': '/', 'schedule': {'interval': schedule}}|opt
-    return yaml.dump(dict(version=2,updates=L(ecosystems).map(upd)), sort_keys=False)
+    return yaml.dump(dict(version=2,updates=[upd(e) for e in listify(ecosystems)]), sort_keys=False)
 
 def mk_hook(cmd):
     'Return a bash hook script that runs `cmd` between gheasy marker comments.'
