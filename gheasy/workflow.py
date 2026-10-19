@@ -1,4 +1,4 @@
-"""Fluent, stateful Python DSL for building and dispatching GitHub Actions workflows.
+"""Build GitHub Actions workflows with chained Python calls, then save them, upload them, or start a run.
 
 Docs: https://vedicreader.github.io/gheasy/workflow.html.md"""
 
@@ -20,6 +20,7 @@ from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 # %% ../nbs/01_workflow.ipynb #f6a7b8c9
 def yaml_instance() -> YAML:
+    "Return the ruamel.yaml writer gheasy formats workflow files with."
     y = YAML()
     y.default_flow_style = y.best_map_flow_style =  False
     y.indent(mapping=2, sequence=4, offset=2)
@@ -56,47 +57,55 @@ class StepBuilder(WorkflowNode):
 # %% ../nbs/01_workflow.ipynb #0b3od12k9gom
 @patch
 def uses(self:StepBuilder, action:str) -> StepBuilder:
+	"Run the action `action`, such as `actions/checkout@v4`, in this step."
 	self._data["uses"] = action
 	return self
 
 @patch
 def run(self:StepBuilder, cmd:str) -> StepBuilder:
+	"Run the shell command `cmd` in this step."
 	self._data["run"] = cmd
 	return self
 
 @patch
 def with_(self:StepBuilder, **kwargs) -> StepBuilder:
-    "Map keyword args → `with` block (underscores become hyphens)."
+    "Set the action's inputs from keyword arguments, with underscores in names turned into hyphens."
     self._data.setdefault("with", {}).update(_hyphenate(**kwargs))
     return self
 
 @patch
 def env(self:StepBuilder, **kwargs) -> StepBuilder:
+    "Add environment variables for this step."
     self._data.setdefault("env", {}); self._data["env"].update(kwargs)
     return self
 
 @patch
 def id(self:StepBuilder, step_id:str) -> StepBuilder:
+    "Name this step so later steps can read its outputs as `steps.<id>.outputs`."
     self._data["id"] = step_id
     return self
 
 @patch
 def if_(self:StepBuilder, condition:str) -> StepBuilder:
+    "Run this step only when the expression `condition` is true."
     self._data["if"] = condition
     return self
 
 @patch
 def continue_on_error(self:StepBuilder, value:bool=True) -> StepBuilder:
+    "Let the job carry on when this step fails."
     self._data["continue-on-error"] = value
     return self
 
 @patch
 def timeout_minutes(self:StepBuilder, minutes:int) -> StepBuilder:
+    "Cancel this step if it runs longer than `minutes`."
     self._data["timeout-minutes"] = minutes
     return self
 
 @patch
 def working_directory(self:StepBuilder, path:str) -> StepBuilder:
+    "Start this step's `run` command in the folder `path`."
     self._data["working-directory"] = path
     return self
 
@@ -104,6 +113,7 @@ def working_directory(self:StepBuilder, path:str) -> StepBuilder:
 # %% ../nbs/01_workflow.ipynb #yx61jj5w7fd
 @patch
 def checkout(self:StepBuilder, ref:str|None=None, fetch_depth:int|None=None) -> StepBuilder:
+    "Make this step check out the repository with `actions/checkout`."
     self._data["uses"] = "actions/checkout@v4"
     if ref or fetch_depth is not None:
         self._data.setdefault("with", {})
@@ -113,6 +123,7 @@ def checkout(self:StepBuilder, ref:str|None=None, fetch_depth:int|None=None) -> 
 
 @patch
 def setup_python(self:StepBuilder, version:str="3.12", cache:str="pip") -> StepBuilder:
+    "Make this step install Python `version` with `actions/setup-python`, caching packages with `cache`."
     self._data["uses"] = "actions/setup-python@v5"
     self._data["with"] = {"python-version": version}
     if cache: self._data["with"]["cache"] = cache
@@ -120,6 +131,7 @@ def setup_python(self:StepBuilder, version:str="3.12", cache:str="pip") -> StepB
 
 @patch
 def setup_node(self:StepBuilder, version:str="20", cache:str="npm") -> StepBuilder:
+    "Make this step install Node.js `version` with `actions/setup-node`, caching packages with `cache`."
     self._data["uses"] = "actions/setup-node@v4"
     self._data["with"] = {"node-version": version}
     if cache: self._data["with"]["cache"] = cache
@@ -127,6 +139,7 @@ def setup_node(self:StepBuilder, version:str="20", cache:str="npm") -> StepBuild
 
 @patch
 def cache(self:StepBuilder, path:str, key:str, restore_keys:list[str]|None=None) -> StepBuilder:
+    "Make this step save and restore the folder `path` under the cache key `key`."
     self._data["uses"] = "actions/cache@v4"
     self._data["with"] = {"path": path, "key": key}
     if restore_keys: self._data["with"]["restore-keys"] = "\n".join(restore_keys)
@@ -134,6 +147,7 @@ def cache(self:StepBuilder, path:str, key:str, restore_keys:list[str]|None=None)
 
 @patch
 def upload_artifact(self:StepBuilder, name:str, path:str, retention_days:int|None=None) -> StepBuilder:
+    "Make this step upload `path` as the artifact `name`, for later jobs to download."
     self._data["uses"] = "actions/upload-artifact@v4"
     self._data["with"] = {"name": name, "path": path}
     if retention_days: self._data["with"]["retention-days"] = retention_days
@@ -141,6 +155,7 @@ def upload_artifact(self:StepBuilder, name:str, path:str, retention_days:int|Non
 
 @patch
 def download_artifact(self:StepBuilder, name:str, path:str|None=None) -> StepBuilder:
+    "Make this step download the artifact `name`, into `path` when given."
     self._data["uses"] = "actions/download-artifact@v4"
     self._data["with"] = {"name": name}
     if path: self._data["with"]["path"] = path
@@ -148,6 +163,7 @@ def download_artifact(self:StepBuilder, name:str, path:str|None=None) -> StepBui
 
 @patch
 def docker_build_push(self:StepBuilder, context:str=".", tags=None, push:bool=False, platforms:str|None=None) -> StepBuilder:
+    "Make this step build a Docker image from `context`, tag it with `tags`, and push it when `push` is true."
     w = {"context": context, "push": push}
     if tags: w["tags"] = "\n".join(tags) if isinstance(tags, list) else tags
     if platforms: w["platforms"] = platforms
@@ -163,12 +179,12 @@ def step(self:StepBuilder, name:str) -> StepBuilder:
 
 @patch
 def end_step(self:StepBuilder):
-    "Return to JobBuilder to continue configuring this job."
+    "Return to the job, to set more of its fields or add its next step."
     return self._job
 
 @patch
 def end_job(self:StepBuilder):
-    "Return to WorkflowBuilder, ending this job."
+    "Return to the workflow, to add another job or build."
     return self._job._workflow
 
 @patch
@@ -177,7 +193,7 @@ def _render(self:StepBuilder) -> CommentedMap: return _to_yaml_val(self._data)
 # %% ../nbs/01_workflow.ipynb #e1f2a3b4
 @dataclass
 class StrategyBuilder:
-    "Fluent builder for a job strategy/matrix block."
+    "Builder for a job's `strategy` block, which runs the job once per combination of matrix values."
     _job: Any
     _matrix: dict[str, list[Any]] = field(default_factory=dict)
     _fail_fast: bool | None = None
@@ -234,112 +250,129 @@ class JobBuilder(WorkflowNode):
 # %% ../nbs/01_workflow.ipynb #7sxpkfhkqaf
 @patch
 def runs_on(self:JobBuilder, runner:str|list[str]) -> JobBuilder:
+    "Run this job on the runner labelled `runner`, such as `ubuntu-latest`."
     self._data["runs-on"] = runner
     return self
 
 @patch
 def needs(self:JobBuilder, *job_ids:str) -> JobBuilder:
+    "Start this job only after the jobs `job_ids` have succeeded."
     self._data["needs"] = list(job_ids) if len(job_ids) > 1 else job_ids[0]
     return self
 
 @patch
 def if_(self:JobBuilder, condition:str) -> JobBuilder:
+    "Run this job only when the expression `condition` is true."
     self._data["if"] = condition
     return self
 
 @patch
 def timeout_minutes(self:JobBuilder, minutes:int) -> JobBuilder:
+    "Cancel this job if it runs longer than `minutes`."
     self._data["timeout-minutes"] = minutes
     return self
 
 @patch
 def continue_on_error(self:JobBuilder, value:bool=True) -> JobBuilder:
+    "Let the workflow succeed even when this job fails."
     self._data["continue-on-error"] = value
     return self
 
 @patch
 def env(self:JobBuilder, **kwargs) -> JobBuilder:
+    "Add environment variables for every step of this job."
     self._data.setdefault("env", {}); self._data["env"].update(kwargs)
     return self
 
 @patch
 def permissions(self:JobBuilder, **kwargs) -> JobBuilder:
+    "Set what this job's `GITHUB_TOKEN` may do, as `read`, `write` or `none` per scope."
     self._data["permissions"] = _hyphenate(**kwargs)
     return self
 
 @patch
 def outputs(self:JobBuilder, **kwargs) -> JobBuilder:
-    "Define job outputs: outputs(artifact_name='${{ steps.upload.outputs.artifact-id }}')"
+    "Publish values from this job that later jobs read as `needs.<job>.outputs.<name>`."
     self._data["outputs"] = _hyphenate(**kwargs)
     return self
 
 @patch
 def concurrency(self:JobBuilder, group:str, cancel_in_progress:bool=True) -> JobBuilder:
+    "Keep two runs of this job in the group `group` from overlapping, cancelling the older one when `cancel_in_progress`."
     self._data["concurrency"] = {"group": group, "cancel-in-progress": cancel_in_progress}
     return self
 
 @patch
 def services(self:JobBuilder, **service_defs) -> JobBuilder:
+    "Start helper containers, such as a database, beside this job."
     self._data["services"] = service_defs
     return self
 
 @patch
 def container(self:JobBuilder, image:str, **options) -> JobBuilder:
+    "Run this job's steps inside the Docker image `image`."
     self._data["container"] = {"image": image, **options}
     return self
 
 @patch
 def environment(self:JobBuilder, name:str) -> JobBuilder:
-    "Set the GitHub environment for this job."
+    "Tie this job to the GitHub environment `name`, with its secrets and approval rules."
     self._data["environment"] = name
     return self
 
 # %% ../nbs/01_workflow.ipynb #jndpnuhf6r9
 @patch
 def strategy(self:JobBuilder) -> StrategyBuilder:
+    "Start this job's matrix strategy and return its builder."
     self._strategy = StrategyBuilder(_job=self)
     return self._strategy
 
 @patch
 def step(self:JobBuilder, name:str) -> StepBuilder:
+    "Add an empty step called `name` to this job and return it."
     s = StepBuilder(name, self); self._steps.append(s)
     return s
 
 @patch
 def checkout(self:JobBuilder, ref:str|None=None, fetch_depth:int|None=None) -> StepBuilder:
+    "Add a step that checks out the repository."
     return self.step("Checkout").checkout(ref=ref, fetch_depth=fetch_depth)
 
 @patch
 def setup_python(self:JobBuilder, version:str="3.12", cache:str="pip") -> StepBuilder:
+    "Add a step that installs Python `version`."
     return self.step(f"Setup Python {version}").setup_python(version=version, cache=cache)
 
 @patch
 def setup_node(self:JobBuilder, version:str="20", cache:str="npm") -> StepBuilder:
+    "Add a step that installs Node.js `version`."
     return self.step(f"Setup Node {version}").setup_node(version=version, cache=cache)
 
 @patch
 def install(self:JobBuilder, cmd:str="pip install -e '.[dev]'") -> StepBuilder:
+    "Add a step that installs dependencies with `cmd`, by default an editable pip install."
     return self.step("Install dependencies").run(cmd)
 
 @patch
 def run_tests(self:JobBuilder, cmd:str="pytest") -> StepBuilder:
+    "Add a step that runs the tests with `cmd`."
     return self.step("Run tests").run(cmd)
 
 @patch
 def setup_uv(self:JobBuilder, version:str|None=None) -> StepBuilder:
-    "Add astral-sh/setup-uv step. Optionally pin a version."
+    "Add a step that installs uv with `astral-sh/setup-uv`, pinned to `version` when given."
     s = self.step('Setup uv').uses('astral-sh/setup-uv@v5')
     if version: s.with_(version=version)
     return s
 
 @patch
 def uv_install(self:JobBuilder, cmd:str='uv sync --frozen') -> StepBuilder:
-    "Add a uv dependency install step."
+    "Add a step that installs dependencies with `cmd`, by default `uv sync --frozen`."
     return self.step('Install dependencies').run(cmd)
 
 @patch
 def uv_run(self:JobBuilder, cmd:str) -> StepBuilder:
-    "Add a step that runs a command via uv run."
+    "Add a step that runs `uv run cmd`."
     return self.step(cmd.split()[0].capitalize()).run(f'uv run {cmd}')
 
 # %% ../nbs/01_workflow.ipynb #qms9k2p5gvi
@@ -358,88 +391,102 @@ def _render(self:JobBuilder) -> CommentedMap:
 
 # %% ../nbs/01_workflow.ipynb #d6e7f8a9
 class TriggerBuilder(WorkflowNode):
-    "Fluent builder for workflow triggers (`on:` block)."
+    "Builder for the events that start a workflow, its `on:` block."
     def __init__(self, workflow):
         self._workflow, self._triggers = workflow, {}
 
     @property
     def on(self):
-        "Allow `.on.push().on.pull_request()` chaining style."
+        "Return this builder, so `.on.push().on.pull_request()` reads naturally."
         return self
 
     @property
     def done(self):
-        "Return to WorkflowBuilder after chaining trigger events."
+        "Return to the workflow after adding triggers."
         return self._workflow
 
 # %% ../nbs/01_workflow.ipynb #q540tiibsk
 @patch
 def push(self:TriggerBuilder, branches=None, tags=None, paths=None,
          branches_ignore=None, paths_ignore=None) -> TriggerBuilder:
+    "Run on pushes, optionally only to some branches or tags, or only when some paths change."
     self._triggers["push"] = _fv({"branches": branches, "tags": tags, "paths": paths,
                                    "branches-ignore": branches_ignore, "paths-ignore": paths_ignore})
     return self
 
 @patch
 def pull_request(self:TriggerBuilder, branches=None, types=None, paths=None) -> TriggerBuilder:
+    "Run on pull requests, optionally only for some target branches, activity types or paths."
     self._triggers["pull_request"] = _fv({"branches": branches, "types": types, "paths": paths})
     return self
 
 @patch
 def pull_request_target(self:TriggerBuilder, branches=None, types=None) -> TriggerBuilder:
+    "Run on pull requests with the target repository's permissions and secrets."
     self._triggers["pull_request_target"] = _fv({"branches": branches, "types": types})
     return self
 
 # %% ../nbs/01_workflow.ipynb #90y4n95qyco
 @patch
 def schedule(self:TriggerBuilder, cron:str) -> TriggerBuilder:
+    "Run on the cron timetable `cron`, in UTC."
     self._triggers.setdefault("schedule", []).append({"cron": cron}); return self
 
 @patch
 def workflow_dispatch(self:TriggerBuilder, inputs:dict|None=None) -> TriggerBuilder:
+    "Allow starting the workflow by hand, asking for `inputs` when given."
     self._triggers["workflow_dispatch"] = _fv({"inputs": inputs})
     return self
 
 @patch
 def workflow_call(self:TriggerBuilder, inputs:dict|None=None, secrets:dict|None=None) -> TriggerBuilder:
+    "Allow other workflows to call this one, with the given `inputs` and `secrets`."
     self._triggers["workflow_call"] = _fv({"inputs": inputs, "secrets": secrets})
     return self
 
 # %% ../nbs/01_workflow.ipynb #wx232j40kg
 @patch
 def release(self:TriggerBuilder, types=None) -> TriggerBuilder:
+    "Run on release events, optionally only the activity `types` given."
     self._triggers["release"] = _fv({"types": types})
     return self
 
 @patch
 def issues(self:TriggerBuilder, types=None) -> TriggerBuilder:
+    "Run on issue events, optionally only the activity `types` given."
     self._triggers["issues"] = _fv({"types": types})
     return self
 
 @patch
 def issue_comment(self:TriggerBuilder, types=None) -> TriggerBuilder:
+    "Run on issue and pull request comments, optionally only the activity `types` given."
     self._triggers["issue_comment"] = _fv({"types": types})
     return self
 
 @patch
 def registry_package(self:TriggerBuilder, types=None) -> TriggerBuilder:
+    "Run when a package in GitHub's registry is published or updated."
     self._triggers["registry_package"] = _fv({"types": types})
     return self
 
 @patch
 def create(self:TriggerBuilder) -> TriggerBuilder:
+    "Run when a branch or tag is created."
     self._triggers["create"] = None; return self
 
 @patch
 def delete(self:TriggerBuilder) -> TriggerBuilder:
+    "Run when a branch or tag is deleted."
     self._triggers["delete"] = None; return self
 
 @patch
 def fork(self:TriggerBuilder) -> TriggerBuilder:
+    "Run when someone forks the repository."
     self._triggers["fork"] = None; return self
 
 @patch
 def page_build(self:TriggerBuilder) -> TriggerBuilder:
+    "Run after a GitHub Pages build."
     self._triggers["page_build"] = None; return self
 
 # %% ../nbs/01_workflow.ipynb #hr4kndagtnk
@@ -453,7 +500,7 @@ def _render(self:TriggerBuilder) -> CommentedMap | list | str:
 
 # %% ../nbs/01_workflow.ipynb #a9b0c1d2
 class WorkflowBuilder:
-    "Top-level fluent workflow builder. Entry point for the DSL."
+    "Builder for a whole workflow: its name, triggers, workflow-wide settings and jobs."
     def __init__(self, name:str):
         self._name = name
         self._run_name:str|None = None
@@ -467,28 +514,31 @@ class WorkflowBuilder:
 # %% ../nbs/01_workflow.ipynb #gcdmhwk82jh
 @patch
 def run_name(self:WorkflowBuilder, template:str) -> WorkflowBuilder:
-    "Set dynamic run name, e.g. '${{ github.actor }} triggered ${{ github.event_name }}'"
+    "Set the title each run shows, such as `'${{ github.actor }} triggered ${{ github.event_name }}'`."
     self._run_name = template
     return self
 
 @patch
 def permissions(self:WorkflowBuilder, **kwargs) -> WorkflowBuilder:
-    "Set workflow-level permissions. Use read/write/none as values."
+    "Set what the workflow's `GITHUB_TOKEN` may do, as `read`, `write` or `none` per scope."
     self._permissions = _hyphenate(**kwargs)
     return self
 
 @patch
 def env(self:WorkflowBuilder, **kwargs) -> WorkflowBuilder:
+    "Add environment variables for every job in the workflow."
     self._env.update(kwargs)
     return self
 
 @patch
 def concurrency(self:WorkflowBuilder, group:str, cancel_in_progress:bool=True) -> WorkflowBuilder:
+    "Keep two runs in the group `group` from overlapping, cancelling the older one when `cancel_in_progress`."
     self._concurrency = {"group": group, "cancel-in-progress": cancel_in_progress}
     return self
 
 @patch
 def job(self:WorkflowBuilder, job_id:str, needs=None) -> JobBuilder:
+    "Add a job with the id `job_id`, waiting for `needs` when given, and return it."
     jb = JobBuilder(job_id, self)
     if needs: jb._data["needs"] = needs
     self._jobs.append(jb)
@@ -515,7 +565,7 @@ def _render(self:WorkflowBuilder) -> CommentedMap:
 # %% ../nbs/01_workflow.ipynb #6mqmpq8s3lw
 @patch
 def uv_test_job(self:WorkflowBuilder, test_cmd:str='pytest', needs=None, python_versions:list[str]|None=None) -> WorkflowBuilder:
-    "Add a uv test job: checkout → setup-uv → sync → test. If `python_versions` is given, adds a strategy matrix."
+    "Add a `test` job that installs with uv and runs `uv run test_cmd`, over a matrix of `python_versions` when given."
     job = self.job('test', needs=needs).runs_on('ubuntu-latest')
     if python_versions: job.strategy().matrix(python_version=python_versions).end_strategy()
     job.checkout().end_step().setup_uv().end_step().uv_install().step('Test').run(f'uv run {test_cmd}').end_job()
@@ -523,14 +573,14 @@ def uv_test_job(self:WorkflowBuilder, test_cmd:str='pytest', needs=None, python_
 
 @patch
 def uv_lint_job(self:WorkflowBuilder, lint_cmd:str='uv run ruff check . && uv run ruff format --check .', needs=None) -> WorkflowBuilder:
-    "Add a uv lint job: checkout → setup-uv → sync → lint. `lint_cmd` defaults to ruff check+format."
+    "Add a `lint` job that installs with uv and runs `lint_cmd`, by default ruff check and ruff format --check."
     (self.job('lint', needs=needs).runs_on('ubuntu-latest').checkout().end_step().setup_uv().end_step().uv_install()
      .step('Lint').run(lint_cmd).end_job())
     return self
 
 @patch
 def uv_pypi_job(self:WorkflowBuilder, needs='test') -> WorkflowBuilder:
-    "Add a PyPI publish job (Trusted Publishing / OIDC) — triggered only on release events."
+    "Add a `publish` job that builds with uv and uploads to PyPI by trusted publishing, only on release events."
     (self.job('publish', needs=needs)
         .runs_on('ubuntu-latest')
         .if_("github.event_name == 'release'")
@@ -542,11 +592,7 @@ def uv_pypi_job(self:WorkflowBuilder, needs='test') -> WorkflowBuilder:
 
 @patch
 def docker_job(self:WorkflowBuilder, app_name:str, needs='test') -> WorkflowBuilder:
-    """Add a Docker build+push job targeting GHCR with a simple ``latest`` tag.
-
-    This is a quick preset for GHCR deploys. For production workflows with
-    semver/sha tags use ``docker_build_push()`` which employs ``metadata-action``.
-    """
+    "Add a `docker` job that builds the image and pushes it to GHCR as `app_name:latest`."
     (self.job('docker', needs=needs)
         .runs_on('ubuntu-latest')
         .permissions(contents='read', packages='write')
@@ -562,7 +608,7 @@ def docker_job(self:WorkflowBuilder, app_name:str, needs='test') -> WorkflowBuil
 
 @patch
 def node_job(self:WorkflowBuilder) -> WorkflowBuilder:
-    "Add a Node.js frontend job: setup-node → npm ci → build → test."
+    "Add a `frontend` job that installs Node.js 20 and runs npm ci, npm run build and npm test."
     (self.job('frontend')
         .runs_on('ubuntu-latest')
         .checkout().end_step()
@@ -572,7 +618,7 @@ def node_job(self:WorkflowBuilder) -> WorkflowBuilder:
 
 @patch
 def rust_job(self:WorkflowBuilder) -> WorkflowBuilder:
-    "Add a Rust build+test+clippy job."
+    "Add a `build` job that runs cargo build, cargo test and cargo clippy with warnings as errors."
     (self.job('build')
         .runs_on('ubuntu-latest')
         .checkout().end_step()
@@ -582,7 +628,7 @@ def rust_job(self:WorkflowBuilder) -> WorkflowBuilder:
 
 @patch
 def go_job(self:WorkflowBuilder) -> WorkflowBuilder:
-    "Add a Go build+test+vet job."
+    "Add a `build` job that installs Go 1.22 and runs go build, go test and go vet."
     (self.job('build')
         .runs_on('ubuntu-latest')
         .checkout().end_step()
@@ -592,7 +638,7 @@ def go_job(self:WorkflowBuilder) -> WorkflowBuilder:
 
 # %% ../nbs/01_workflow.ipynb #c1d2e3f4
 class WorkflowDoc:
-    "Immutable, serializable workflow document produced by WorkflowBuilder.build()."
+    "A finished workflow, as returned by `build()`, that can be printed, saved, uploaded or run."
     def __init__(self, builder:WorkflowBuilder):
         self._builder = builder
         self._rendered:CommentedMap = builder._render()
@@ -600,6 +646,7 @@ class WorkflowDoc:
 # %% ../nbs/01_workflow.ipynb #kdcvqp17rr
 @patch
 def to_yaml(self:WorkflowDoc) -> str:
+    "Return the workflow as YAML text."
     import io
     buf = io.StringIO()
     yaml_instance().dump(self._rendered, buf)
@@ -607,6 +654,7 @@ def to_yaml(self:WorkflowDoc) -> str:
 
 @patch
 def save(self:WorkflowDoc, path:str|Path) -> Path:
+    "Write the workflow YAML to `path`, creating missing folders, and return the path."
     p = Path(path); p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "w") as f: yaml_instance().dump(self._rendered, f)
     return p
@@ -618,7 +666,7 @@ def __repr__(self:WorkflowDoc) -> str: return self.to_yaml()
 @patch
 def dispatch(self:WorkflowDoc, owner:str, repo:str, ref:str="main",
              inputs:dict|None=None, token:str|None=None):
-    "Trigger workflow_dispatch via ghapi. Returns the API response."
+    "Start a run of this workflow on `ref` through its `workflow_dispatch` trigger, and return GitHub's response."
     from ghapi.all import GhApi
     tok = token or os.environ.get("GITHUB_TOKEN")
     if not tok: raise ValueError("GitHub token required: pass token= or set GITHUB_TOKEN env var")
@@ -629,7 +677,7 @@ def dispatch(self:WorkflowDoc, owner:str, repo:str, ref:str="main",
 @patch
 def upload(self:WorkflowDoc, owner:str, repo:str, branch:str="main",
            token:str|None=None, commit_message:str|None=None):
-    "Create or update the workflow YAML file in the repo via the GitHub Contents API."
+    "Commit this workflow to `.github/workflows/<name>.yml` on `branch`, creating or replacing the file."
     import base64
     from ghapi.all import GhApi
     tok = token or os.environ.get("GITHUB_TOKEN")
@@ -648,7 +696,7 @@ def upload(self:WorkflowDoc, owner:str, repo:str, branch:str="main",
 
 @patch
 def list_runs(self:WorkflowDoc, owner:str, repo:str, token:str|None=None, per_page:int=10):
-    "List recent workflow runs for this workflow."
+    "Return the most recent runs of this workflow."
     from ghapi.all import GhApi
     tok = token or os.environ.get("GITHUB_TOKEN")
     if not tok: raise ValueError("GitHub token required")
@@ -659,40 +707,27 @@ def list_runs(self:WorkflowDoc, owner:str, repo:str, token:str|None=None, per_pa
 # %% ../nbs/01_workflow.ipynb #gc68z2utr8
 @patch
 def watch(self:WorkflowDoc, run_id:int, owner:str, repo:str) -> None:
-    "Stream live logs via `gh run watch`. Requires gh CLI installed and authenticated."
+    "Follow run `run_id` live with `gh run watch`."
     subprocess.run(["gh","run","watch",str(run_id),"--repo",f"{owner}/{repo}"], check=True)
 
 @patch
 def logs(self:WorkflowDoc, run_id:int, owner:str, repo:str) -> None:
-    "Print logs of a completed run via `gh run view --log`."
+    "Print the logs of finished run `run_id` with `gh run view --log`."
     subprocess.run(["gh","run","view",str(run_id),"--log","--repo",f"{owner}/{repo}"], check=True)
 
 # %% ../nbs/01_workflow.ipynb #f4a5b6c7
 def Workflow(name: str) -> WorkflowBuilder:
-    """
-    Entry point for the fluent workflow DSL.
-
-    Example:
-        wfb = Workflow("ci")
-        wfb.on.push(branches=["main"])
-        wfb.uv_test_job().uv_lint_job()
-        wfb.build().save(".github/workflows/ci.yml")
-    """
+    "Start building a workflow called `name`."
     return WorkflowBuilder(name)
 
 # %% ../nbs/01_workflow.ipynb #b6c7d8e9
 def docker_build_push(
-    name: str = "Docker Build & Push",
-    registry: str = "ghcr.io",
-    image_name: str = "${{ github.repository }}",
-    branches: list[str] | None = None,
+    name: str = "Docker Build & Push",                 # workflow name
+    registry: str = "ghcr.io",                         # registry to log in and push to
+    image_name: str = "${{ github.repository }}",      # image name under the registry
+    branches: list[str] | None = None,                 # branches whose pushes build an image; default ['main']
 ) -> WorkflowDoc:
-    """Build and push a Docker image to GHCR using ``metadata-action`` for production tags.
-
-    Uses ``docker/metadata-action`` to produce semver and commit-sha tags
-    automatically. For a quick deploy with a simple ``latest`` tag, use the
-    ``docker_job()`` ``WorkflowBuilder`` preset instead.
-    """
+    "Return a workflow that builds a Docker image on each push to `branches` and pushes it to `registry`, tagged by `docker/metadata-action`."
     br = branches or ["main"]
     wf = Workflow(name)
     wf.on.push(branches=br)
@@ -710,12 +745,12 @@ def docker_build_push(
     return wf.build()
 
 def pages_deploy(
-    name: str = "Deploy to GitHub Pages",
-    build_cmd: str = "npm run build",
-    artifact_path: str = "dist/",
-    node_version: str = "20",
+    name: str = "Deploy to GitHub Pages",  # workflow name
+    build_cmd: str = "npm run build",      # command that builds the site
+    artifact_path: str = "dist/",          # folder the build writes, which is published
+    node_version: str = "20",              # Node.js version to install
 ) -> WorkflowDoc:
-    """Build a static site and deploy to GitHub Pages."""
+    """Return a workflow that builds a static site with npm and deploys `artifact_path` to GitHub Pages."""
     wf = Workflow(name)
     wf.on.push(branches=["main"]).workflow_dispatch()
     wf.permissions(contents="read", pages="write", id_token="write")
@@ -733,28 +768,13 @@ def pages_deploy(
 
 # %% ../nbs/01_workflow.ipynb #jo9srtnowop
 def uv_ci(
-    name: str = "CI",
-    python_versions: list[str] | None = None,
-    test_cmd: str| None = "pytest",
-    lint_cmd: str | None = "uv run ruff check . && uv run ruff format --check .",
-    branches: list[str] | None = None,
+    name: str = "CI",                                # workflow name
+    python_versions: list[str] | None = None,        # run the tests once per Python version
+    test_cmd: str| None = "pytest",                  # command run as `uv run test_cmd`
+    lint_cmd: str | None = "uv run ruff check . && uv run ruff format --check .",  # full lint command; None leaves out the lint job
+    branches: list[str] | None = None,               # branches whose pushes and pull requests run CI; default ['main']
 ) -> WorkflowDoc:
-    """Standard Python/uv CI: checkout → setup-uv → sync → lint + test.
-
-    Uses uv for dependency management. Delegates to ``uv_lint_job`` and
-    ``uv_test_job`` presets for consistent step layout.
-
-    Args:
-        test_cmd: Bare command passed to ``uv run`` (e.g. ``"pytest"`` → ``uv run pytest``).
-        lint_cmd: Full lint command. Pass ``None`` to skip the lint job entirely.
-            Defaults to ruff check+format via ``uv_lint_job`` preset default.
-        python_versions: When set, adds a strategy matrix over Python versions.
-
-    Example::
-
-        doc = uv_ci(name='My CI', python_versions=['3.11', '3.12'])
-        doc.save('.github/workflows/ci.yml')
-    """
+    "Return a uv CI workflow: a `lint` job running `lint_cmd` (skipped when `None`), then a `test` job running `uv run test_cmd`."
     br = branches or ["main"]
     wfb = Workflow(name)
     wfb.on.push(branches=br).pull_request(branches=br)

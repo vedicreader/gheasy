@@ -1,4 +1,4 @@
-"""Every repository a workspace can see, listed in one stable order, with one operation across all of them.
+"""List every repository a workspace can see in one stable order, and run one operation across all of them.
 
 Docs: https://vedicreader.github.io/gheasy/repos.html.md"""
 

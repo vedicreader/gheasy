@@ -1,4 +1,4 @@
-"""Manage `.gheasy/config.json`, generate GitHub Actions workflows, and run `gh_*` CI/CD helpers.
+"""Keep a project's CI settings in `.gheasy/config.json`, and generate its workflow, git hooks, LFS rules and GitHub settings from them.
 
 Docs: https://vedicreader.github.io/gheasy/core.html.md"""
 
@@ -43,22 +43,19 @@ class DeployOptions:
 
 @dataclass
 class GheasyConfig:
-    """Mutable config backed by `.gheasy/config.json`.
-    Chainable mutating methods return `self` for fluent use.
-    Use `GheasyConfig.load(path)` to read; `.save(path)` to write.
-    Not thread-safe: do not share instances across concurrent callers."""
+    "The settings in `.gheasy/config.json`, with chainable methods to change them and `load` and `save` to read and write the file."
     app: str = ''
     envs: dict = field(default_factory=dict)           # {env_name: EnvConfig}
     health_path: str = '/health'
     test_cmd: str = None
-    env_schema: dict = field(default_factory=dict)     # {KEY: None} → secret, {KEY: "val"} → variable
+    env_schema: dict = field(default_factory=dict)     # {KEY: None} -> secret, {KEY: "val"} -> variable
     hooks: dict = field(default_factory=dict)
     lfs: list = field(default_factory=list)
-    workflows: dict = field(default_factory=dict)      # opt-in flags, all False by default
+    workflows: dict = field(default_factory=dict)      # CI job flags such as {'lint': True}, or a list of flags to turn on
     workflow_preset: str = None                        # 'python'|'fasthtml'|'fastapi-react'|'nodejs'|'rust'|'go'
-    deploy_cmd: str = None                             # override deploy step; None = skip deploy job
+    deploy_cmd: str = None                             # shell command each deploy job runs; None adds no deploy jobs
     extra_jobs: dict = field(default_factory=dict)
-    deploys: dict = field(default_factory=dict)        # runtime state, persisted but not in workflow YAML
+    deploys: dict = field(default_factory=dict)        # deploys recorded by gh_record_deploy; saved, but not used in the workflow
     deploy_pkg: str = None
 
     def add_env(self, name, host, domain, branch=None, srv_path='/srv/app'):
@@ -96,19 +93,19 @@ class GheasyConfig:
 
     @classmethod
     def load(cls, path='.'):
-        'Load config from .gheasy/config.json. Raises FileNotFoundError if absent.'
+        'Read `.gheasy/config.json` under `path`, or return an empty config when the file does not exist.'
         return cls.from_dict(cfg_path(path).read_json()) if cfg_path(path).exists() else cls()
 
     @classmethod
     def from_pyproject(cls, path='.'):
-        'Bootstrap config from pyproject.toml [project] name.'
+        'Start a config named after the `[project] name` in `pyproject.toml`.'
         import tomllib
         with open(Path(path)/'pyproject.toml', 'rb') as f: data = tomllib.load(f)
         return cls(app=data['project']['name'])
 
 # %% ../nbs/00_core.ipynb #bce1eff0d6df247f
 def cfg_path(path='.') -> Path:
-    'Return path to .gheasy/config.json'
+    'Return the path of the config file, `.gheasy/config.json`, under `path`.'
     return Path(path) / '.gheasy' / 'config.json'
 
 # %% ../nbs/00_core.ipynb #62b8f0fa7c496a67
@@ -122,7 +119,7 @@ def _res_wfs(cfg):
     return {**base, **(dict.fromkeys(wfs, True) if isinstance(wfs, (list, tuple)) else wfs)}
 
 def mk_deploy_job(env_name, cfg, wfb, cmd=None):
-    "Add deploy job for env_name to wfb using DSL. Returns None (with warning) if no deploy cmd."
+    "Add the deploy job for `env_name` to the workflow builder `wfb`, or warn and add nothing when there is no deploy command."
     env = cfg.envs[env_name]
     deploy_step = cmd or cfg.deploy_cmd
     if not deploy_step:
@@ -152,24 +149,16 @@ def _inject_raw_job(job_id, wfb, raw):
 
 # %% ../nbs/00_core.ipynb #13c847a1e6f994a4
 def mk_workflow(cfg, *,
-    on_pull_request: bool | None = None,    # also trigger on pull_request events
-    test:            bool | None = None,    # uv test job (pytest by default, cfg.test_cmd to override)
-    lint:            bool | None = None,    # ruff check + format (needs: test)
-    publish_pypi:    bool | None = None,    # PyPI trusted publishing on release (needs: test)
-    docker_build:    bool | None = None,    # Docker build + push to GHCR (needs: test)
-    node:            bool | None = None,    # Node.js build + test (frontend job)
-    rust:            bool | None = None,    # Rust build + test + clippy
-    go:              bool | None = None,    # Go build + test + vet
+    on_pull_request: bool | None = None,    # also run on pull requests, not only pushes
+    test:            bool | None = None,    # uv test job: `uv run pytest`, or cfg.test_cmd
+    lint:            bool | None = None,    # ruff check and format check
+    publish_pypi:    bool | None = None,    # PyPI trusted publishing on release events, after test
+    docker_build:    bool | None = None,    # Docker build and push to GHCR, after test
+    node:            bool | None = None,    # `frontend` job: npm ci, build and test
+    rust:            bool | None = None,    # Rust build, test and clippy
+    go:              bool | None = None,    # Go build, test and vet
 ):
-    '''Generate complete GitHub Actions workflow YAML from a GheasyConfig.
-    Each flag enables a corresponding job. `None` (default) defers to the
-    value resolved from `cfg.workflow_preset` + `cfg.workflows`. Passing
-    `True` or `False` overrides cfg for that flag.
-    Example::
-        cfg = GheasyConfig.from_pyproject().add_env('prod', '1.2.3.4', 'myapp.com')
-        cfg.deploy_cmd = './deploy.sh'
-        print(mk_workflow(cfg, test=True, lint=True))
-    '''
+    "Build the CI workflow YAML for `cfg`; a flag left as `None` takes its value from the config's preset and `workflows`."
     kw = dict(on_pull_request=on_pull_request, test=test, lint=lint, publish_pypi=publish_pypi,
              docker_build=docker_build, node=node, rust=rust, go=go)
     flags = _res_wfs(cfg) | filter_values(kw, not_(is_(None)))
@@ -192,19 +181,19 @@ def mk_workflow(cfg, *,
 _lfs_st, _lfs_end = '# BEGIN gheasy-lfs', '# END gheasy-lfs'
 
 def mk_gitattributes(patterns):
-    'Generate LFS block for .gitattributes with sentinel comments.'
+    'Return the gheasy LFS block for `.gitattributes`, one line per pattern, between marker comments.'
     st, end = _lfs_st, _lfs_end
     ga = L(patterns).map(lambda p: f'{p} filter=lfs diff=lfs merge=lfs -text')
     return '\n'.join(st+ga+end) + '\n'
 
 def mk_dependabot(ecosystems=('pip', 'github-actions'), schedule='weekly', assignees=None, lbls=None):
-    'Generate .github/dependabot.yml content.'
+    'Return the text of a `.github/dependabot.yml` that checks `ecosystems` for updates every `schedule`.'
     opt = dict(assignees=listify(assignees)) if assignees else {} | dict(labels=listify(lbls)) if lbls else {}
     def upd(eco): return {'package-ecosystem': eco, 'directory': '/', 'schedule': {'interval': schedule}}|opt
     return yaml.dump(dict(version=2,updates=L(ecosystems).map(upd)), sort_keys=False)
 
 def mk_hook(cmd):
-    'Generate a bash hook script with gheasy-managed sentinels.'
+    'Return a bash hook script that runs `cmd` between gheasy marker comments.'
     return f'''
     #!/bin/bash
     # BEGIN gheasy-managed
@@ -214,12 +203,11 @@ def mk_hook(cmd):
 
 # %% ../nbs/00_core.ipynb #1e7eb3ed4bcd7b40
 def nbdev_hook():
-    "Return the pre-commit cmd that runs nbdev_prepare via uv, injecting nbdev if not in project deps."
+    "Return the pre-commit command that runs `nbdev-prepare` through uv, adding nbdev even when the project does not depend on it."
     return 'uv run --with nbdev nbdev-prepare'
 
 def gh_hooks(hooks=None, path='.'):
-    """Install git hooks. hooks = {'pre-commit': cmd, ...} where cmd is a str or list[str].
-    Reads cfg.hooks if hooks not passed."""
+    "Install git hooks from `{hook_name: command}`, or from the config's `hooks` when none are given."
     hooks = hooks or GheasyConfig.load(path).hooks
     if not hooks: return
     if not (git_dir := Path(path) / '.git').exists(): print(f'no .git directory at {path!r}.'); return
@@ -236,22 +224,21 @@ def gh_hooks(hooks=None, path='.'):
         hp.chmod(hp.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 def gh_githooks_pre_commit(cmd=None, path='.'):
-    "Install pre-commit hook. Defaults to nbdev_hook(). Pass cmd= to override."
+    "Install a pre-commit hook that runs `cmd`, or `nbdev_hook()` when `cmd` is not given."
     gh_hooks({'pre-commit': cmd or nbdev_hook()}, path=path)
 
 # %% ../nbs/00_core.ipynb #b69d0568e617edc0
 _LFS_DEFAULTS = ['*.db', '*.onnx', '*.bin', '*.pt', '*.pkl', '*.safetensors', '*.tar.gz', '*.mp4', '*.parquet']
 
 def gh_lfs(patterns=None, persist=True, path='.'):
-    "Track LFS patterns. If persist=True, saves to config (source of truth for gh_gitattributes)."
+    "Install Git LFS, track each pattern, and save the patterns to the config when `persist` is true."
     patterns = patterns or _LFS_DEFAULTS
     sp.run(['git', 'lfs', 'install'], cwd=path, check=True, capture_output=True)
     for p in patterns: sp.run(['git', 'lfs', 'track', p], cwd=path, check=True, capture_output=True)
     if persist: GheasyConfig.load(path).set_lfs(patterns).save(path)
 
 def gh_gitattributes(path='.'):
-    """Regenerate gheasy-managed LFS block in .gitattributes from config.
-    Preserves all non-managed lines. Call after gh_lfs(persist=True)."""
+    "Rewrite the gheasy LFS block in `.gitattributes` from the config's `lfs` patterns, keeping every other line."
     if not cfg_path(path).exists(): print('No .gheasy/config.json — run gh_init first.'); return
     cfg = GheasyConfig.load(path)
     if not cfg.lfs: print('No LFS patterns in config — run gh_lfs(persist=True) first.'); return
@@ -264,7 +251,7 @@ def gh_gitattributes(path='.'):
 
 # %% ../nbs/00_core.ipynb #6a1565aa0735813d
 def gh_token(token=None):
-    "Tiered resolution: explicit > GITHUB_TOKEN env"
+    "Return `token`, or the `GITHUB_TOKEN` environment variable when `token` is not given."
     return token or os.getenv('GITHUB_TOKEN')
 
 def _get_repo_slug(path='.'):
@@ -276,14 +263,14 @@ def _get_repo_slug(path='.'):
     return owner.group(1), url_name(url)
 
 def gh_api(token=None, path='.'):
-    "Return (owner, repo_name, GhApi) instance."
+    "Return `(owner, repo_name, GhApi)` for the GitHub repository that the `origin` remote at `path` points to."
     # ghapi builds async ops unless asked; nothing here awaits, so async would orphan every call
     owner, repo = _get_repo_slug(path)
     return owner, repo, GhApi(owner=owner, repo=repo, token=token, sync=True)
 
 def gh_protect(branch='main', require_reviews=1, dismiss_stale=True, require_status_checks=('test',),
            enforce_admins=False, allow_force_pushes=False, token=None, path='.'):
-    "Set branch protection rules via ghapi. Requires token with repo admin scope."
+    "Set the protection rules for `branch`; needs a token with admin rights on the repository."
     owner, repo, api = gh_api(token or gh_token(), path)
     rsc = dict(strict=True, contexts=listify(require_status_checks))
     rprr=dict(required_approving_review_count=require_reviews, dismiss_stale_reviews=dismiss_stale)
@@ -291,21 +278,20 @@ def gh_protect(branch='main', require_reviews=1, dismiss_stale=True, require_sta
         required_pull_request_reviews=rprr, restrictions=None, allow_force_pushes=allow_force_pushes)
 
 def gh_topics(topics, token=None, path='.'):
-    "Replace repo topics. GitHub enforces lowercase."
+    "Replace the repository's topics with `topics`, lowercased as GitHub requires."
     owner, repo, api = gh_api(gh_token(token), path)
     api.repos.replace_all_topics(names=[t.lower() for t in topics])
 
 # %% ../nbs/00_core.ipynb #4c7885e278b5f879
 def gh_secret(key, value, env=None, dry_run=False):
-    "Set a single GitHub secret, optionally scoped to an environment."
+    "Set one GitHub Actions secret with `gh secret set`, scoped to the environment `env` when given."
     cmd = ['gh', 'secret', 'set', key, '--body', value]
     if env: cmd += ['--env', env]
     if dry_run: print(f'[dry-run] {" ".join(cmd)}'); return
     sp.run(cmd, check=True)
 
 def gh_push_env(envs, dry_run=False, path='.'):
-    """Route env vars to secrets or variables using cfg.env_schema.
-    Schema: {KEY: None} -> Secret, {KEY: 'default'} -> Variable."""
+    "Send each key of `envs` to GitHub as a secret or a variable, as the config's `env_schema` says."
     if not cfg_path(path).exists(): raise FileNotFoundError('No .gheasy/config.json')
     cfg = GheasyConfig.load(path)
     schema = cfg.env_schema
@@ -318,7 +304,7 @@ def gh_push_env(envs, dry_run=False, path='.'):
              else: sp.run(cmd, check=True)
 
 def gh_secrets_from_file(env_file='.env', env=None, dry_run=False):
-    "Read KEY=VALUE pairs from env_file and push all as GitHub secrets."
+    "Set every `KEY=VALUE` line in `env_file` as a GitHub secret."
     lines = Path(env_file).read_text().splitlines()
     for line in lines:
         line = line.strip()
@@ -328,13 +314,7 @@ def gh_secrets_from_file(env_file='.env', env=None, dry_run=False):
 
 # %% ../nbs/00_core.ipynb #961beb9422ea2b84
 def gh_deploy_key_setup(key_path, dry_run=False):
-    """Read SSH private key from file and push as DEPLOY_KEY GitHub secret.
-
-    Step 3 of deploy key setup (steps 1-2 require manual SSH access):
-    1. Generate key pair: ssh-keygen -t ed25519 -f deploy_key
-    2. Add public key to server ~/.ssh/authorized_keys (manual)
-    3. Call this function with the private key path to upload to GitHub secrets
-    """
+    "Upload the SSH private key at `key_path` as the `DEPLOY_KEY` secret that deploy jobs use."
     key = Path(key_path).read_text()
     gh_secret('DEPLOY_KEY', key, dry_run=dry_run)
     if not dry_run: print(f'DEPLOY_KEY set from {key_path}')
@@ -370,7 +350,7 @@ def _checks(api, sha):
 
 @flexicache(time_policy(60), maxsize=32)
 def pr_context(path, branch):
-    "A branch's pull request, its base, how far that base has moved, and how its checks stand."
+    "Return the open pull request for `branch`, how far its base has moved, and its checks, or `pr=None` with the reason in `note`."
     try:
         api, owner, name = _pr_api(path)
         pr = first(api.pulls.list(head=f'{owner}:{branch}', state='open', per_page=5))
@@ -390,7 +370,7 @@ def gh_init(name, host, domain, env='prod', branch=None, srv_path='/srv/app',
             health_path='/health', test_cmd=None, env_schema=None,
             hooks=None, lfs=None, workflows=None, workflow_preset=None,
             deploy_cmd=None, path='.'):
-    "Create or update .gheasy/config.json."
+    "Write a new `.gheasy/config.json` with one environment, replacing any config already there."
     branch = branch or _git_branch(path)
     cfg = GheasyConfig(app=name, health_path=health_path, test_cmd=test_cmd, env_schema=env_schema or {},
         hooks=hooks or {}, lfs=lfs or [], workflows=workflows or {}, workflow_preset=workflow_preset,deploy_cmd=deploy_cmd)
@@ -401,7 +381,7 @@ def gh_init(name, host, domain, env='prod', branch=None, srv_path='/srv/app',
 
 # %% ../nbs/00_core.ipynb #79f8b906fe103403
 def gh_add_env(env, host, domain, branch=None, srv_path='/srv/app', path='.'):
-    "Add or update an environment in config. Regenerates workflow locally."
+    "Add or replace the environment `env` in the config and rewrite the local workflow file."
     cfg = GheasyConfig.load(path)
     cfg.add_env(env, host, domain, branch=branch or _git_branch(path), srv_path=srv_path)
     cfg.save(path)
@@ -411,13 +391,13 @@ def gh_add_env(env, host, domain, branch=None, srv_path='/srv/app', path='.'):
     print(f'Added env {env!r}. Run gh_workflow() to push to GitHub.')
 
 def gh_add_job(name, job, path='.'):
-    "Add a custom GitHub Actions job dict to config. Run gh_workflow() to push."
+    "Store a custom GitHub Actions job dict in the config for the next `gh_workflow`."
     cfg = GheasyConfig.load(path)
     cfg.add_job(name, job).save(path)
     print(f'Added job {name!r}. Run gh_workflow() to push.')
 
 def gh_workflow(token=None, path='.'):
-    "Write workflow YAML locally. With token, also uploads via ghapi."
+    "Write `.github/workflows/gheasy.yml` from the config, and with a token also commit it to GitHub."
     cfg = GheasyConfig.load(path)
     wf_str = mk_workflow(cfg)
     wf_path = Path(path) / '.github' / 'workflows' / 'gheasy.yml'
@@ -442,7 +422,7 @@ def gh_workflow(token=None, path='.'):
         print('Workflow uploaded to GitHub.')
 
 def gh_status(path='.'):
-    "Print deploy state table."
+    "Print a table of the deploys recorded in the config."
     if not cfg_path(path).exists():
         print('No .gheasy/config.json found.')
         return
@@ -458,12 +438,12 @@ def gh_status(path='.'):
               f'{d.get("deployed_at","?"):<25} {d.get("status","?")}')
 
 def gh_ship(token=None, path='.'):
-    "Push workflow YAML (optionally to GitHub API) then print status."
+    "Write the workflow (and upload it when given a token), then print the deploy table."
     gh_workflow(token=token, path=path)
     gh_status(path=path)
 
 def gh_record_deploy(env, sha, path='.'):
-    "Record deploy state to config. Called by CI after successful deploy."
+    "Record that commit `sha` is deployed to `env`, with the time; CI calls this after a successful deploy."
     cfg = GheasyConfig.load(path)
     cfg.deploys[env] = {
         'version': sha,
@@ -478,8 +458,7 @@ def gh_setup(name, host, domain, env='prod', branch=None, srv_path='/srv/app',
              hooks=None, hook_cmd='uv run nbdev_prepare',
              lfs=None, workflows=None, workflow_preset=None,
              deploy_cmd=None, path='.'):
-    """One-call setup: gh_init + gh_workflow + gh_hooks.
-    Set hooks={} to skip hook installation."""
+    "Set up a project in one call: write the config and the workflow, and install hooks (`hooks={}` installs none)."
     gh_init(name, host, domain, env=env, branch=branch, srv_path=srv_path,
             health_path='/health', test_cmd=test_cmd, env_schema=env_schema,
             hooks=hooks or {}, lfs=lfs, workflows=workflows,
@@ -500,7 +479,7 @@ FINDING_WORKFLOWS         = 'workflows'
 
 @dataclass
 class RepoFinding:
-    "A single finding from a repo health check."
+    "One result of a repository health check, with an optional fix."
     level: str      # 'ok' | 'warn' | 'error'
     category: str
     message: str
@@ -519,7 +498,7 @@ class RepoFinding:
 
 # %% ../nbs/00_core.ipynb #2a58e41eafabef9a
 def gh_check(owner=None, repo=None, token=None, path='.', remote=True, local=True, verbose=True):
-    "Audit repo health. local: hooks/gitattributes/pyproject. remote: protection/topics/dependabot."
+    "Audit a repository: hook, LFS block and build backend locally, and topics and dependabot on GitHub."
     chks = []
     if local:
         hp = Path(path) / '.git' / 'hooks' / 'pre-commit'
@@ -559,7 +538,7 @@ def gh_check(owner=None, repo=None, token=None, path='.', remote=True, local=Tru
     return chks
 
 def gh_apply(findings, dry_run=False, confirm=False):
-    "Auto-fix all non-ok findings that have a fix callable."
+    "Run the fix of every finding that is not `ok` and has one, and return the findings that were fixed."
     applied = []
     for f in findings:
         if f.level == 'ok' or f.fix is None: continue
@@ -574,7 +553,7 @@ def gh_apply(findings, dry_run=False, confirm=False):
 # %% ../nbs/00_core.ipynb #3ec95dc2f954acd2
 @dataclass
 class GheasyRepo:
-    "Thin stateful shell over gh_* functions. All logic lives in standalone functions."
+    "A GitHub repository and a local path, with methods that run the `gh_*` functions on them."
     ref: str = None
     token: str = None
     path: str = '.'
@@ -603,7 +582,7 @@ class GheasyRepo:
     @classmethod
     def new(cls, ref, template='nbdev', private=True, description='',
             token=None, parent_dir='.', topics=None, workflows=None, python=DEFAULT_PYTHON):
-        "Full project scaffold: create repo, clone, configure, push."
+        "Create a GitHub repository, clone it, scaffold and configure the project, and push the first commit."
         owner, repo = _resolve_gh_repo_input(ref)
         inst = cls(ref=ref, token=token or gh_token())
         inst.create(private=private, description=description)
@@ -662,7 +641,7 @@ def _migrate_pyproject_to_hatchling(path='.'):
     return changed
 
 def gh_pyproject_to_hatchling(path='.', dry_run=False):
-    "Convert pyproject.toml to hatchling build backend. Idempotent."
+    "Rewrite `pyproject.toml` to build with hatchling; running it again changes nothing."
     if dry_run:
         print(f'[dry-run] Would migrate {Path(path) / "pyproject.toml"} to hatchling')
         return
@@ -677,7 +656,7 @@ def repo_root(path='.'):
     return first((p, *p.parents), lambda d: (d/'.git').exists()) or p
 
 def mv_skill_md(dry_run=True, path='.'):
-    "Copy bundled SKILL.md into .claude/skills/gheasy/ and .agents/skills/gheasy/."
+    "Copy gheasy's bundled `SKILL.md` into the repository's `.claude/skills/gheasy/` and `.agents/skills/gheasy/`."
     base = Path(__file__).parent if '__file__' in globals() else Path.cwd()
     if not (src := base/'SKILL.md').exists(): return
     root = repo_root(path)
@@ -691,12 +670,7 @@ def mv_skill_md(dry_run=True, path='.'):
 def gh_new(ref: str, template: str = 'nbdev', private: bool = True,
            description: str = '', token: str = None, parent_dir: str = '.',
            topics: list = None, workflows: list = None, python: str = DEFAULT_PYTHON):
-    """Scaffold a full project: create GitHub repo, clone, configure, and push.
-
-    ref can be 'owner/repo' or a GitHub URL.
-    workflows is a list of CI flags to enable: test lint publish_pypi docker_build node rust go
-    Example: gheasy gh-new myorg/myrepo --workflows test lint --topics python nbdev --python 3.13
-    """
+    "Create a GitHub repository from `owner/repo` or a URL, scaffold it, turn on the CI flags in `workflows`, and push."
     wfs = {k: True for k in workflows} if workflows else None
     GheasyRepo.new(ref, template=template, private=private, description=description,
                    token=token, parent_dir=parent_dir,

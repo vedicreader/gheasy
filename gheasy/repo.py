@@ -1,4 +1,4 @@
-"""Inspect and change a Git repository through one locked gateway, with recovery points before risky operations.
+"""Read and change a local Git repository from Python, with a way to undo any change that could lose work.
 
 Docs: https://vedicreader.github.io/gheasy/repo.html.md"""
 
@@ -118,7 +118,7 @@ JOURNAL_NAME, JOURNAL_KEEP = 'leela-safepoints.json', 60
 
 @dataclass
 class Safepoint:
-    "Where a repository was, immediately before one mutation."
+    "Where a repository was just before one change: its commit, its branch and a snapshot of uncommitted work."
     token: str
     op: str
     head: str
@@ -149,7 +149,7 @@ class GitGateway:
         return self._exe
     env_for = None   #: Optional checkout-specific environment provider
     def env(self, cwd, ttl=30):
-        "Return the checkout environment supplied by `env_for`."
+        "Return the environment Git runs with in `cwd`, from `env_for`, cached for `ttl` seconds."
         if self.env_for is None: return None
         key = str(cwd)
         hit = self._env_cache.get(key)
@@ -158,7 +158,7 @@ class GitGateway:
         self._env_cache[key] = (time.monotonic(), value)
         return value
     def memo(self, cwd, key, make, ttl=60):
-        "Cache a repository value for `ttl` seconds."
+        "Return `make()` for this repository and `key`, cached for `ttl` seconds."
         cache_key = (str(cwd), key)
         hit = self._env_cache.get(cache_key)
         if hit and time.monotonic() - hit[0] < ttl: return hit[1]
@@ -166,7 +166,7 @@ class GitGateway:
         self._env_cache[cache_key] = (time.monotonic(), value)
         return value
     def resolves(self, cwd, command):
-        "Resolve the executable used by a configured filter or hook."
+        "Return the full path of the program `command` would run, or an empty string when it cannot be found."
         try: parts = shlex.split(str(command or ''))
         except ValueError: return ''
         if not parts: return ''
@@ -175,7 +175,7 @@ class GitGateway:
 # %% ../nbs/02_repo.ipynb #5b48817a
 @patch
 def run(self:GitGateway, cwd, *args, check=True, input=None, timeout=30, kind=None):
-    "Run one Git command under its repository lock."
+    "Run one Git command in `cwd` under the repository's lock, raising `GitError` on failure unless `check=False`."
     kind = kind or classify(args)
     lock = self._lock(cwd)
     with {'read': lock.read, 'write': lock.write, 'net': lock.net}[kind]():
@@ -207,7 +207,7 @@ def _exec(self:GitGateway, cwd, args, check, input, timeout, kind):
 
 @patch
 def out(self:GitGateway, cwd, *args, **kwargs):
-    "Run Git and return stdout."
+    "Run one Git command and return its stdout."
     return self.run(cwd, *args, **kwargs).stdout
 
 # %% ../nbs/02_repo.ipynb #16b51391
@@ -242,7 +242,7 @@ def _record(self:GitGateway, root, point):
 # %% ../nbs/02_repo.ipynb #5cfab65e
 @patch
 def safepoint(self:GitGateway, root, op):
-    "Where the repository is, without touching it. None when no snapshot can be taken."
+    "Record where the repository is, without changing it, and return the `Safepoint`, or `None` on a branch with no commits."
     head = self.run(root, 'rev-parse', 'HEAD', check=False)
     head = head.stdout.strip() if not head.returncode else ''
     if not head: return None
@@ -262,14 +262,14 @@ def safepoint(self:GitGateway, root, op):
 @patch
 @contextmanager
 def transaction(self:GitGateway, root, op, snapshot=True):
-    "Hold the write lock for a whole operation, with a way back recorded first."
+    "Hold the write lock for a whole operation, recording a safepoint first unless `snapshot` is false."
     with self._lock(root).write():
         yield self.safepoint(root, op) if snapshot else None
 
 # %% ../nbs/02_repo.ipynb #ae77fdf0
 @patch
 def undo(self:GitGateway, root, token=''):
-    "Restore a recorded safepoint and its uncommitted work."
+    "Restore the safepoint named by `token`, or the newest one, including its uncommitted work."
     points = self.journal(root)
     if not points:
         raise GitError('nothing to undo -- no safepoint has been recorded for this repository')
@@ -516,18 +516,21 @@ def _diff_numstat(raw):
 # %% ../nbs/02_repo.ipynb #5eb48ec9
 @dataclass
 class GitRepo:
+    "One local Git checkout, with methods to read it and change it."
     root: Path
     AUTOSTASH_REF = 'refs/leela/autostash'   # kept, like `SAFEPOINT_REF`: it names refs already on disk
     _WOULD_CLOBBER = ('would be overwritten', 'local changes')
 
 @patch(cls_method=True)
 def at(cls:GitRepo, path):
+    "Open the repository that contains `path`, which may be any file or folder inside it."
     root = repo_root(path)
     if root is None: raise GitError(f'{Path(path).name or path} is not inside a Git repository')
     return cls(root)
 
 @patch
 def run(self:GitRepo, *args, **kwargs):
+    "Run a Git command in this repository and return its stdout."
     return _run(self.root, *args, **kwargs).stdout
 
 @patch
@@ -625,12 +628,12 @@ def _changes_uncached(self:GitRepo):
 
 @patch
 def changes(self:GitRepo):
-    "Current status. Uncached: the gutter asks right after a save and must see it."
+    "Every file that differs from `HEAD`, read fresh on each call."
     return self._changes_uncached()
 
 @patch
 def decorations(self:GitRepo):
-    "The same status for the file tree, which asks once per open folder in one refresh."
+    "The same rows as `changes`, through the short-lived cache, for a file tree that asks repeatedly."
     return _cached(self.root, 'changes', self._changes_uncached)
 
 # %% ../nbs/02_repo.ipynb #4e5934ab
@@ -830,6 +833,7 @@ def ignore(self:GitRepo, path, directory=False):
 
 @patch
 def write_worktree(self:GitRepo, path, content):
+    "Write `content` to the file `path` inside the repository, refusing paths outside it."
     target = (self.root/str(path)).resolve()
     if not target.is_relative_to(self.root.resolve()):
         raise GitError('file is outside the repository')
@@ -841,6 +845,7 @@ def write_worktree(self:GitRepo, path, content):
 
 @patch
 def apply_patch(self:GitRepo, patch, staged=True, reverse=False):
+    "Apply the unified diff `patch` to the index, or to the working tree with `staged=False`."
     if not str(patch).strip(): raise GitError('select at least one diff hunk')
     args = ['apply', '--whitespace=nowarn']
     if staged: args.append('--cached')
@@ -911,23 +916,27 @@ def delete_remote(self:GitRepo, remote, branch): self._mutate('push', remote, '-
 # %% ../nbs/02_repo.ipynb #95105975
 @patch
 def commit(self:GitRepo, message, amend=False):
+    "Commit the staged changes with `message`, or replace the last commit when `amend`."
     if not message.strip(): raise GitError('a commit message is required')
     args = ['commit', *(['--amend'] if amend else []), '-m', message.strip()]
     return self._guarded('commit', lambda: self._mutate(*args).strip())
 
 @patch
 def fetch(self:GitRepo, remote='', prune=True):
+    "Fetch from `remote`, or from every remote, pruning deleted branches when `prune`."
     args = ['fetch', remote] if remote else ['fetch', '--all']
     if prune: args.append('--prune')
     return self._mutate(*args, timeout=120).strip()
 
 @patch
 def pull(self:GitRepo):
+    "Fast-forward this branch to its upstream, never making a merge commit."
     return self._guarded('pull', lambda: self._mutate(
         'pull', '--ff-only', '--autostash', timeout=120).strip())
 
 @patch
 def push(self:GitRepo, publish=False, force_with_lease=False):
+    "Push this branch; `publish` sets an upstream for a new branch and `force_with_lease` overwrites only an unchanged remote."
     args = ['push']
     if publish:
         branch = self.run('branch', '--show-current').strip()
@@ -944,10 +953,12 @@ def stash(self:GitRepo, message=''): return self._mutate('stash', 'push', '-u', 
 
 @patch
 def stash_pop(self:GitRepo, ref='stash@{0}'):
+    "Reapply the stash `ref` and remove it from the stash list."
     return self._guarded('stash pop', lambda: self._attempt('stash', 'pop', ref))
 
 @patch
 def stash_apply(self:GitRepo, ref='stash@{0}'):
+    "Reapply the stash `ref` and keep it in the stash list."
     return self._guarded('stash apply', lambda: self._attempt('stash', 'apply', ref))
 
 @patch
@@ -966,24 +977,29 @@ def merge(self:GitRepo, branch, strategy='merge'):
 
 @patch
 def rebase(self:GitRepo, branch):
+    "Replay this branch's commits on top of `branch`."
     return self._guarded('rebase', lambda: self._attempt('rebase', '--autostash', branch))
 
 @patch
 def cherry_pick(self:GitRepo, ref):
+    "Apply the commit `ref` on top of the current branch."
     return self._guarded('cherry-pick', lambda: self._attempt('cherry-pick', ref))
 
 @patch
 def revert(self:GitRepo, ref):
+    "Add a commit that undoes the commit `ref`."
     return self._guarded('revert', lambda: self._attempt('revert', '--no-edit', ref))
 
 @patch
 def reset(self:GitRepo, ref='HEAD', mode='mixed'):
+    "Move the branch to `ref`, keeping changes staged (`soft`), unstaged (`mixed`) or discarding them (`hard`)."
     if mode not in {'soft', 'mixed', 'hard'}:
         raise GitError('reset mode must be soft, mixed, or hard')
     return self._guarded('reset', lambda: self._mutate('reset', f'--{mode}', ref).strip())
 
 @patch
 def operation_action(self:GitRepo, action):
+    "Continue, skip or abort the merge, rebase, cherry-pick or revert in progress."
     active = self._operation()['active']
     if not active: raise GitError('no Git operation is in progress')
     if action not in {'continue', 'skip', 'abort'}:
@@ -997,6 +1013,7 @@ def operation_action(self:GitRepo, action):
 # %% ../nbs/02_repo.ipynb #c1e9d731
 @patch
 def tag(self:GitRepo, name, message='', ref='HEAD'):
+    "Tag `ref` as `name`, as an annotated tag when `message` is given."
     if not name.strip(): raise GitError('a tag name is required')
     args = ['tag']
     if message.strip():
@@ -1007,6 +1024,7 @@ def tag(self:GitRepo, name, message='', ref='HEAD'):
 
 @patch
 def delete_tag(self:GitRepo, name, remote=''):
+    "Delete the tag `name`, and on `remote` too when given."
     self._mutate('tag', '-d', name)
     if remote: self._mutate('push', remote, f':refs/tags/{name}', timeout=120)
 
@@ -1038,6 +1056,7 @@ def _gather(jobs, serial):
 
 @patch
 def info(self:GitRepo):
+    "Everything an editor's Git panel shows for this repository, in one dictionary, cached briefly."
     def collect():
         gen, gw = _gen(self.root), gateway()
         gw.env(self.root); self._gitdir()
@@ -1080,7 +1099,7 @@ def _fetch_time(self:GitRepo):
 # %% ../nbs/02_repo.ipynb #b26114c4
 @patch
 def brief(self:GitRepo, fresh=False):
-    "One repository as a single row: branch, drift, dirt, and how far past its last tag."
+    "This repository as one row: branch, ahead and behind, uncommitted counts, last commit, and commits since the last tag."
     if fresh: invalidate(self.root)
     def collect():
         branch = self.run('branch', '--show-current').strip()
@@ -1112,6 +1131,7 @@ def brief(self:GitRepo, fresh=False):
 # %% ../nbs/02_repo.ipynb #7a9448d4
 @patch
 def history(self:GitRepo, limit=100, skip=0, query='', ref='--all', path=''):
+    "Commits newest first, filtered by `ref`, `query` and `path`, `limit` at a time."
     limit, skip = max(1, min(int(limit), 500)), max(0, int(skip))
     fmt = '%H%x00%h%x00%P%x00%an%x00%ae%x00%at%x00%D%x00%G?%x00%s'
     args = ['log', ref, f'--max-count={limit}', f'--skip={skip}', f'--format={fmt}']
@@ -1128,6 +1148,7 @@ def history(self:GitRepo, limit=100, skip=0, query='', ref='--all', path=''):
 
 @patch
 def reflog(self:GitRepo, limit=100):
+    "The most recent commits `HEAD` has pointed at, newest first."
     fmt = '%H%x00%h%x00%gD%x00%gs%x00%an%x00%at'
     rows = []
     for line in self.run('reflog', f'--max-count={max(1, min(int(limit), 500))}', f'--format={fmt}').splitlines():
@@ -1138,6 +1159,7 @@ def reflog(self:GitRepo, limit=100):
 
 @patch
 def commit_detail(self:GitRepo, ref):
+    "One commit's metadata, full message and patch."
     meta = self.run('show', '-s', '--format=%H%x00%h%x00%P%x00%an%x00%ae%x00%at%x00%D%x00%B', ref)
     (oid, short, parents, author, email,
         stamp, decoration, message) = _fields(meta.rstrip('\n'), 8)
@@ -1237,6 +1259,7 @@ def _file_pair(self:GitRepo, path, base, head, from_label, to_label, context, ol
 
 @patch
 def review_file(self:GitRepo, base, head, path, mode='review', context=3):
+    "Both versions of `path` in a `review` comparison, and the patch between them."
     review = self.review(base, head, mode)
     known = first(x for x in review['files'] if x['path'] == path)
     if known is None: raise GitError(f'{path} is not changed in this comparison')
@@ -1249,6 +1272,7 @@ def review_file(self:GitRepo, base, head, path, mode='review', context=3):
 # %% ../nbs/02_repo.ipynb #aec9bb32
 @patch
 def commit_review(self:GitRepo, ref):
+    "A `review`-style comparison of commit `ref` with its parent, or with an empty tree for a first commit."
     oid = self._resolve_ref(ref)
     meta = self.commit_detail(oid)
     parent = meta['parents'][0] if meta['parents'] else self.run('mktree', input='').strip()
@@ -1258,6 +1282,7 @@ def commit_review(self:GitRepo, ref):
 
 @patch
 def commit_file(self:GitRepo, ref, path, context=3):
+    "Both versions of one file changed by commit `ref`, and the patch between them."
     detail = self.commit_review(ref)
     known = first(x for x in detail['files'] if x['path'] == path)
     if known is None: raise GitError(f'{path} is not changed by this commit')
@@ -1269,6 +1294,7 @@ def commit_file(self:GitRepo, ref, path, context=3):
 # %% ../nbs/02_repo.ipynb #215054ef
 @patch
 def merge_preview(self:GitRepo, incoming):
+    "Describe merging `incoming` into the current branch, without changing anything."
     current = self.run('branch', '--show-current').strip() or 'HEAD'
     current_oid, incoming_oid = self._resolve_ref('HEAD'), self._resolve_ref(incoming)
     merge_base = self._ask('merge-base', current_oid, incoming_oid)
@@ -1286,7 +1312,7 @@ def merge_preview(self:GitRepo, incoming):
 
 @patch
 def rebase_preview(self:GitRepo, onto):
-    "Describe replaying current-only commits on `onto` before mutating history."
+    "Describe rebasing the current branch onto `onto`, without changing anything."
     current = self.run('branch', '--show-current').strip()
     if not current: raise GitError('cannot rebase a detached HEAD')
     current_oid, onto_oid = self._resolve_ref('HEAD'), self._resolve_ref(onto)
@@ -1313,6 +1339,7 @@ def compare(self:GitRepo, left, right):
 # %% ../nbs/02_repo.ipynb #37017fbd
 @patch
 def conflict_versions(self:GitRepo, path):
+    "The base, ours, theirs and working-tree versions of the conflicted file `path`."
     change = first(row for row in self.changes() if row['path'] == path)
     if not change or not change['conflicted']: raise GitError(f'{path} is not conflicted')
     def stage(number):
@@ -1387,6 +1414,7 @@ def resolve_safe_conflicts(self:GitRepo, paths=()):
 # %% ../nbs/02_repo.ipynb #c036e1ea
 @patch
 def blame(self:GitRepo, path, start=1, end=0):
+    "The commit, author, time and summary that last changed each line of `path`."
     args = ['blame', '--line-porcelain']
     if end: args += ['-L', f'{max(1, int(start))},{max(int(start), int(end))}']
     args += ['--', path]
@@ -1410,6 +1438,7 @@ def blame(self:GitRepo, path, start=1, end=0):
 # %% ../nbs/02_repo.ipynb #8e77beab
 @patch
 def worktrees(self:GitRepo):
+    "Every checkout of this repository, with its folder, branch and commit."
     rows, current = [], None
     for line in self.run('worktree', 'list', '--porcelain').splitlines() + ['']:
         if line.startswith('worktree '):
@@ -1426,6 +1455,7 @@ def worktrees(self:GitRepo):
 
 @patch
 def add_worktree(self:GitRepo, path, branch='', create=False):
+    "Check out `branch` in a new worktree at `path`, creating the branch when `create`."
     args = ['worktree', 'add']
     if create and branch: args += ['-b', branch]
     args += [path]
@@ -1434,10 +1464,12 @@ def add_worktree(self:GitRepo, path, branch='', create=False):
 
 @patch
 def remove_worktree(self:GitRepo, path, force=False):
+    "Remove the worktree at `path`, even with uncommitted changes when `force`."
     return self._mutate('worktree', 'remove', *(['--force'] if force else []), path).strip()
 
 @patch
 def submodules(self:GitRepo):
+    "The submodules, each with its path, commit and state."
     r = _run(self.root, 'submodule', 'status', '--recursive', check=False)
     if r.returncode and not (self.root/'.gitmodules').exists(): return []
     rows = []
@@ -1452,6 +1484,7 @@ def submodules(self:GitRepo):
 # %% ../nbs/02_repo.ipynb #ee3a8773
 @patch
 def diff(self:GitRepo, path='', staged=False, left='', right='', context=3):
+    "The `git diff` text for unstaged changes, staged ones, or between refs, for one `path` when given."
     args = ['diff', '--no-ext-diff', _unified_arg(context)]
     if staged: args.append('--cached')
     if left and right: args.append(f'{left}...{right}')
@@ -1482,6 +1515,7 @@ def _lfs_pointer(raw):
 
 @patch
 def diff_view(self:GitRepo, path, staged=False):
+    "One file's unstaged changes, or staged ones with `staged=True`, as a diff and two versions to show side by side."
     change = first(c for c in self.changes() if c['path'] == path)
     if change and change['untracked'] and not staged:
         raw = _unified('', self._version(path, 'worktree'), '/dev/null', f'b/{path}')
@@ -1581,6 +1615,7 @@ def _patch_hunks(diff):
 # %% ../nbs/02_repo.ipynb #0e66e74e
 @patch
 def file_changes(self:GitRepo, path):
+    "The changed line ranges, hunks and diff of `path` compared with `HEAD`."
     changed = first(c for c in self.changes() if c['path'] == path)
     if changed is None:
         return {'path': path, 'changed': False, 'ranges': [], 'hunks': [], 'diff': ''}
