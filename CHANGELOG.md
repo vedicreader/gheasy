@@ -2,6 +2,11 @@
 
 <!-- do not remove -->
 
+## 0.0.13
+- `mk_dependabot` keeps `labels` when `assignees` is set, and writes plain YAML lists.
+- `rust_job` and `go_job` name their jobs `rust` and `go`, so one workflow can hold both.
+- The docs drop an example that called `gh_pr` and `gh_pr_merge`, which gheasy does not have.
+
 ## 0.0.12
 - `gh_new` / `GheasyRepo.create` make an org's repo in the org; they made it under the signed-in user.
 - `gh_workflow` takes the list of workflow names `gh_init` stores.
