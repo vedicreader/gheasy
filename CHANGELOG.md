@@ -2,6 +2,9 @@
 
 <!-- do not remove -->
 
+## 0.0.14
+- `GitGateway.run` gives Git `/dev/null` as stdin when no `input` is passed, so a Git command never reads or reconfigures the caller's terminal. The ripgrep scan in `find_repos`, `gh_lfs`, `GheasyRepo.new` and `WorkflowDoc.watch`/`logs` do the same. `gh secret set` and `gh variable set` keep the terminal, since an empty value makes `gh` ask for one.
+
 ## 0.0.13
 - `mk_dependabot` keeps `labels` when `assignees` is set, and writes plain YAML lists.
 - `rust_job` and `go_job` name their jobs `rust` and `go`, so one workflow can hold both.

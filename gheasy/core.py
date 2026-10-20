@@ -233,8 +233,8 @@ _LFS_DEFAULTS = ['*.db', '*.onnx', '*.bin', '*.pt', '*.pkl', '*.safetensors', '*
 def gh_lfs(patterns=None, persist=True, path='.'):
     "Install Git LFS, track each pattern, and save the patterns to the config when `persist` is true."
     patterns = patterns or _LFS_DEFAULTS
-    sp.run(['git', 'lfs', 'install'], cwd=path, check=True, capture_output=True)
-    for p in patterns: sp.run(['git', 'lfs', 'track', p], cwd=path, check=True, capture_output=True)
+    sp.run(['git', 'lfs', 'install'], cwd=path, check=True, capture_output=True, stdin=sp.DEVNULL)
+    for p in patterns: sp.run(['git', 'lfs', 'track', p], cwd=path, check=True, capture_output=True, stdin=sp.DEVNULL)
     if persist: GheasyConfig.load(path).set_lfs(patterns).save(path)
 
 def gh_gitattributes(path='.'):
@@ -587,18 +587,18 @@ class GheasyRepo:
         inst = cls(ref=ref, token=token or gh_token())
         inst.create(private=private, description=description)
         local_path = Path(parent_dir) / repo
-        if not (local_path / '.git').exists(): sp.run(['git', 'clone', f'https://github.com/{owner}/{repo}', str(local_path)], check=True)
+        if not (local_path / '.git').exists(): sp.run(['git', 'clone', f'https://github.com/{owner}/{repo}', str(local_path)], check=True, stdin=sp.DEVNULL)
         else: print(f'Repo already cloned at {local_path}, skipping clone.')
-        sp.run(['uv', 'python', 'pin', python], cwd=local_path, check=True)
-        if template == 'nbdev': sp.run(['uv', 'run', 'nbdev-new'], cwd=local_path, check=True)
+        sp.run(['uv', 'python', 'pin', python], cwd=local_path, check=True, stdin=sp.DEVNULL)
+        if template == 'nbdev': sp.run(['uv', 'run', 'nbdev-new'], cwd=local_path, check=True, stdin=sp.DEVNULL)
         gh_pyproject_to_hatchling(path=local_path)
         gh_lfs(persist=True, path=local_path)
         gh_githooks_pre_commit(path=local_path)
         if workflows: gh_init(repo, '', '', workflows=workflows, path=local_path)
         if workflows: gh_workflow(token=inst.token, path=local_path)
-        sp.run(['git', 'add', '-A'], cwd=local_path, check=True)
-        sp.run(['git', 'commit', '-m', 'chore: gheasy init'], cwd=local_path, check=True)
-        sp.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=local_path, check=True)
+        sp.run(['git', 'add', '-A'], cwd=local_path, check=True, stdin=sp.DEVNULL)
+        sp.run(['git', 'commit', '-m', 'chore: gheasy init'], cwd=local_path, check=True, stdin=sp.DEVNULL)
+        sp.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=local_path, check=True, stdin=sp.DEVNULL)
         if topics: gh_topics(topics, token=inst.token, path=local_path)
         return cls(ref=ref, token=inst.token, path=str(local_path))
 

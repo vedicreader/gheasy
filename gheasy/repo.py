@@ -187,7 +187,7 @@ def _exec(self:GitGateway, cwd, args, check, input, timeout, kind):
     for attempt in range(LOCK_ATTEMPTS):
         try:
             p = subprocess.run(
-                argv, cwd=str(cwd), input=input, text=True,
+                argv, cwd=str(cwd), input=input, stdin=subprocess.DEVNULL if input is None else None, text=True,
                 encoding='utf-8', errors='replace', stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, timeout=timeout, env=self.env(cwd),
             )

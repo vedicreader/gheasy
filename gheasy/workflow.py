@@ -708,12 +708,12 @@ def list_runs(self:WorkflowDoc, owner:str, repo:str, token:str|None=None, per_pa
 @patch
 def watch(self:WorkflowDoc, run_id:int, owner:str, repo:str) -> None:
     "Follow run `run_id` live with `gh run watch`."
-    subprocess.run(["gh","run","watch",str(run_id),"--repo",f"{owner}/{repo}"], check=True)
+    subprocess.run(["gh","run","watch",str(run_id),"--repo",f"{owner}/{repo}"], check=True, stdin=subprocess.DEVNULL)
 
 @patch
 def logs(self:WorkflowDoc, run_id:int, owner:str, repo:str) -> None:
     "Print the logs of finished run `run_id` with `gh run view --log`."
-    subprocess.run(["gh","run","view",str(run_id),"--log","--repo",f"{owner}/{repo}"], check=True)
+    subprocess.run(["gh","run","view",str(run_id),"--log","--repo",f"{owner}/{repo}"], check=True, stdin=subprocess.DEVNULL)
 
 # %% ../nbs/01_workflow.ipynb #f4a5b6c7
 def Workflow(name: str) -> WorkflowBuilder:
