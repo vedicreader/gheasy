@@ -5,11 +5,11 @@
 
 gheasy has four modules, and most projects only need one or two of them.
 
-`gheasy.workflow` writes GitHub Actions workflows. A workflow is a YAML file under `.github/workflows/` that tells GitHub which jobs to run on a push, a pull request or a release. You describe it with chained Python calls and gheasy writes the YAML, so you never have to get the indentation of a hand-written file right.
+`gheasy.workflow` writes GitHub Actions workflows. A workflow is a YAML file under `.github/workflows/` that tells GitHub which jobs to run on a push, a pull request or a release. You describe it with chained Python calls, and gheasy writes the YAML. You never write or indent YAML by hand.
 
-`gheasy.core` keeps a project’s CI settings in one file, `.gheasy/config.json`, and generates the workflow, git hooks, Git LFS rules and GitHub secrets from it. It also installs the `gheasy` command line tool.
+`gheasy.core` keeps a project’s CI settings in one file, `.gheasy/config.json`, and generates the workflow, git hooks, Git LFS rules and GitHub secrets from it. It also provides the `gheasy` command line tool.
 
-`gheasy.repo` reads and changes a local Git checkout. Before any change that could lose work, such as a merge, a rebase or a reset, it records a safepoint: the commit the branch pointed at and a snapshot of your uncommitted changes. A single call puts everything back.
+`gheasy.repo` reads and changes a local Git checkout. Before any change that could lose work, such as a merge, a rebase or a reset, it records a safepoint: the commit the branch pointed at and a snapshot of your uncommitted changes. One call restores both.
 
 `gheasy.repos` works across many checkouts at once, for a folder that holds several repositories you work on together.
 
@@ -21,7 +21,7 @@ pip install gheasy
 
 ## Generate a CI workflow
 
-For a Python project that uses uv, [`uv_ci`](https://vedicreader.github.io/gheasy/workflow.html#uv_ci) gives you a complete CI workflow in one call. It runs on every push and pull request to main, installs dependencies with `uv sync --frozen`, runs ruff, and then runs pytest. Passing `lint_cmd=None`, as here, leaves out the lint job. `to_yaml` returns the text, and `save('.github/workflows/ci.yml')` writes it to the place GitHub looks for it.
+For a Python project that uses uv, [`uv_ci`](https://vedicreader.github.io/gheasy/workflow.html#uv_ci) returns a complete CI workflow. It runs on every push and pull request to [`main`](https://vedicreader.github.io/gheasy/core.html#main), installs dependencies with `uv sync --frozen`, runs ruff, and then runs pytest. `lint_cmd=None`, as here, leaves out the lint job. `to_yaml` returns the YAML text. `save('.github/workflows/ci.yml')` writes it to the path where GitHub looks for workflows.
 
 ``` python
 from gheasy.workflow import uv_ci
@@ -51,7 +51,7 @@ print(uv_ci("ci", lint_cmd=None).to_yaml())
 
 ## Inspect a local repository
 
-[`GitRepo`](https://vedicreader.github.io/gheasy/repo.html#gitrepo) wraps one local checkout. [`GitRepo.at`](https://vedicreader.github.io/gheasy/repo.html#gitrepo.at) takes the repository root or any file or folder inside it, and finds the root itself. `info` returns everything an editor’s Git panel shows, in one dictionary: the current branch, how many commits it is ahead of and behind its upstream (the remote branch it tracks), the local and remote branches, remotes, uncommitted changes, tags, stashes, any merge or rebase in progress, whether the repository’s content filters can run, and recent safepoints. When a one-line summary is enough, for a status bar or a prompt, `brief` is cheaper.
+[`GitRepo`](https://vedicreader.github.io/gheasy/repo.html#gitrepo) wraps one local checkout. [`GitRepo.at`](https://vedicreader.github.io/gheasy/repo.html#gitrepo.at) takes the repository root or any file or folder inside it, and finds the root. `info` returns everything an editor’s Git panel shows, in one dictionary. The dictionary holds the current branch, the number of commits the branch is ahead of and behind its upstream (the remote branch it tracks), the local and remote branches, the remotes, uncommitted changes, tags, stashes, any merge or rebase in progress, whether the repository’s content filters can run, and the 12 most recent safepoints. `info` caches its result for a short time. `brief` returns one row with the branch, ahead and behind counts, uncommitted counts, the last commit and the commits since the last tag. Use `brief` for a status bar or a prompt.
 
 ``` python
 from gheasy.repo import GitRepo
@@ -64,9 +64,9 @@ status['branch'], status['clean'], status['ahead'], status['behind']
 
 ## Preview before changing history
 
-A merge can stop on conflicts and a rebase rewrites your commits, so it helps to know what will happen before you run either. `divergence` compares the current branch with its upstream and tries a fast-forward, a merge, a rebase and a reset without performing any of them. It reports which are possible, which would conflict, and which it recommends. `fetch=True` fetches from the remote first, so the comparison is against the latest upstream. `merge_preview` and `rebase_preview` answer the same question for one branch you name.
+A merge can stop on conflicts, and a rebase rewrites your commits. `divergence` shows what each would do before you run either. It compares the current branch with its upstream and rehearses a fast-forward, a merge, a rebase and a reset without performing any of them. It reports which are available, which would conflict, and which one it recommends. `fetch=True` fetches from the remote first. `merge_preview` reports a proposed merge with the branch you name. `rebase_preview` reports a proposed rebase onto the branch you name.
 
-None of these change your branches, the index or the files on disk. They use `git merge-tree`, which works out the result of a merge without checking anything out.
+None of these methods change your branches, the index or the files on disk. They use `git merge-tree`, which computes the result of a merge without checking anything out.
 
 ``` python
 preview = repo.divergence(fetch=True)
@@ -198,22 +198,21 @@ repo.rebase_preview('origin/main')
 
 ## Change the repository with a way back
 
-The methods that can lose work record a safepoint before they run. These are `checkout`, `commit`, `pull`, `merge`, `rebase`, `cherry_pick`, `revert`, `reset`, `sync`, `stash_pop` and `stash_apply`. Each returns a dictionary with a one-sentence `summary` of what happened and an `undo` token. Passing the token to `undo` restores the branch, the commit and the uncommitted work as they were.
+These methods record a safepoint before they run: `checkout`, `commit`, `pull`, `merge`, `rebase`, `cherry_pick`, `revert`, `reset`, `sync`, `stash_pop` and `stash_apply`. Each returns a dictionary with a one-sentence `summary` of what happened and an `undo` token. `undo(token)` restores the branch, the commit and the uncommitted work as they were.
 
-`sync` carries out one of the options `divergence` offered. The usual pattern is to call `divergence`, read `recommended`, and pass it to `sync`, as the last line here does.
+`sync` carries out one of the options `divergence` offered: `fast-forward`, `merge`, `rebase` or `reset`. The default is `rebase`. Call `divergence`, read `recommended`, and pass it to `sync`, as the last line here does. `recommended` is an empty string when the branch is identical to its upstream or ahead of it. Pass `sync` a real option in that case, or skip the call.
 
 ``` python
 result = repo.checkout('feature')
 print(result['summary'])
 repo.undo(result['undo'])
 
-# Apply the strategy selected after reviewing `divergence`.
 repo.sync(preview['recommended'])
 ```
 
 ## Review branches and commits
 
-`review(base, head)` shows what a branch changed: each file with its added and deleted line counts, the commits, and totals. It compares `head` with the merge base, the last commit the two branches share, so work that landed on `base` after the branch split off does not show up as part of the branch. Loading every file’s contents up front would be slow for a large branch, so `review_file` loads the two versions of one file, and the patch between them, only when you ask. `commit_review` and `commit_file` give the same view of a single commit compared with its parent.
+`review(base, head)` shows what a branch changed: each file with its added and deleted line counts, the commits, and totals. It compares `head` with the merge base, the last commit the two branches share. Commits added to `base` after the branch split off do not appear as changes of the branch. `review` does not load file contents. `review_file(base, head, path)` loads the two versions of one file and the patch between them when you call it. `commit_review` and `commit_file` give the same view of a single commit compared with its parent.
 
 ``` python
 review = repo.review('main', 'claude/ramabana-branching-review-uqj6v2')
@@ -229,9 +228,9 @@ file_review['left'], file_review['right'], file_review['patch']
 
 ## Build a library pipeline
 
-For anything [`uv_ci`](https://vedicreader.github.io/gheasy/workflow.html#uv_ci) does not cover, start from `Workflow(name)`, add triggers through `.on`, and add jobs. gheasy has one-call presets for the common jobs. Here `uv_lint_job` runs ruff, `uv_test_job` runs pytest once lint has passed, and `uv_pypi_job` builds the package and uploads it to PyPI once the tests have passed. `build()` turns the builder into a document you can print or save.
+For anything [`uv_ci`](https://vedicreader.github.io/gheasy/workflow.html#uv_ci) does not cover, start from `Workflow(name)`, add triggers through `.on`, and add jobs. gheasy has one-call presets for common jobs. `uv_lint_job` adds a `lint` job that runs ruff. `uv_test_job` adds a `test` job that runs pytest. `uv_pypi_job` adds a `publish` job that builds the package and uploads it to PyPI. `needs` names the job that must pass first. `build()` turns the builder into a document you can print or save.
 
-The publish job only runs when a GitHub release starts the workflow. This example triggers on pushes and pull requests alone, so add `.release(types=['published'])` to the triggers when you want releases to publish.
+The `publish` job runs only when a GitHub release starts the workflow. This example triggers on pushes and pull requests only. Add `.release(types=['published'])` to the triggers to publish on release.
 
 ``` python
 from gheasy.workflow import Workflow
@@ -292,7 +291,7 @@ print(wfb.build().to_yaml())
 
 ## Build an application pipeline
 
-When no preset fits, build the job step by step. `job(name)` starts a job, `needs` makes it wait for another job, and `runs_on` picks the machine it runs on. A step helper such as `checkout` or `setup_uv` adds one step and returns that step, so `end_step()` takes you back to the job to add the next step, and `end_job()` takes you back to the workflow. This example tests every push to main and then deploys to Fly.io.
+When no preset fits, build the job step by step. `job(name)` starts a job. `needs` makes it wait for another job. `runs_on` sets the machine it runs on. A step helper such as `checkout` or `setup_uv` adds one step and returns that step. `end_step()` returns to the job so you can add the next step. `end_job()` returns to the workflow. This example tests every push to [`main`](https://vedicreader.github.io/gheasy/core.html#main) and then deploys to Fly.io.
 
 ``` python
 wfb = Workflow("deploy")
@@ -338,47 +337,42 @@ print(wfb.build().to_yaml())
 
 ## Configure LFS and secrets
 
-Git LFS keeps large binary files out of the Git history and commits a small pointer file in their place. [`gh_lfs`](https://vedicreader.github.io/gheasy/core.html#gh_lfs) installs LFS in the repository and tells it which file patterns to handle.
+Git LFS keeps large binary files out of the Git history and commits a small pointer file in their place. [`gh_lfs`](https://vedicreader.github.io/gheasy/core.html#gh_lfs) installs LFS in the repository and tracks the file patterns you pass. It also saves the patterns to `.gheasy/config.json` unless you pass `persist=False`. With no patterns it tracks a default list of model and data file types.
 
-GitHub Actions jobs read their settings from secrets, which GitHub encrypts and hides in logs, and from variables, which are plain text. [`gh_push_env`](https://vedicreader.github.io/gheasy/core.html#gh_push_env) takes a dict of values and sends each key to one or the other, using the `env_schema` saved in `.gheasy/config.json`. A key whose schema default is `None` becomes a secret, and a key with a string default becomes a variable. Keys missing from the schema are skipped with a warning. It sets them with the `gh` command line tool, which must be installed and logged in.
+GitHub Actions jobs read their settings from secrets, which GitHub encrypts and hides in logs, and from variables, which are plain text. [`gh_push_env`](https://vedicreader.github.io/gheasy/core.html#gh_push_env) takes a dict of values and sends each key as a secret or a variable, as the `env_schema` in `.gheasy/config.json` says. A key whose schema default is `None` becomes a secret. A key with a string default becomes a variable. A key missing from the schema is skipped with a warning. [`gh_push_env`](https://vedicreader.github.io/gheasy/core.html#gh_push_env) raises `FileNotFoundError` when `.gheasy/config.json` does not exist. It sets the values with the `gh` command line tool, which must be installed and logged in.
 
 ``` python
 from gheasy.core import gh_lfs, gh_secrets_from_file, gh_push_env, GheasyConfig
 
-# 1. Track binary/media files in git-lfs
 gh_lfs(['*.mp3', '*.ogg', '*.wav', '*.png', '*.jpg', '*.webp', '*.xml', '*.db'])
 
-# 2. Describe the settings: a None default makes a secret, a string default makes a variable
 cfg = GheasyConfig(app='vedicreader', env_schema={
-    # variables (have sane defaults)
+    # variables: string defaults
     'MODE': 'dev', 'PORT': '5001', 'DOMAIN': 'http://localhost:5001',
     'WANT_GOOGLE': 'true', 'WANT_GIT': 'false',
     'NEED_BACKUP': 'false', 'RC_TYPE': 's3', 'RC_PROVIDER': 'Cloudflare',
-    # secrets (no default, so they must be set)
+    # secrets: None defaults
     'JWT_SCRT': None, 'RESEND_API_KEY': None,
     'GOOGLE_CLI': None, 'GOOGLE_SCRT': None,
     'CF_ACCESS_KEY_ID': None, 'CF_SCRT_ACCESS_KEY': None, 'CF_ENDPOINT': None,
 })
 cfg.save()
 
-# sends each schema key found in the environment: None default -> gh secret set, string default -> gh variable set
 import os
 gh_push_env(dict(os.environ))
 ```
 
-When every value should be a secret, you can skip the schema. [`gh_secrets_from_file`](https://vedicreader.github.io/gheasy/core.html#gh_secrets_from_file) reads the `KEY=VALUE` lines of a file such as `.env`, ignores blank lines and `#` comments, and sets each one as a GitHub secret. `dry_run=True` prints the `gh` commands instead of running them, and `env='prod'` limits the secrets to jobs that deploy to the `prod` environment.
+When every value is a secret, the schema is not needed. [`gh_secrets_from_file`](https://vedicreader.github.io/gheasy/core.html#gh_secrets_from_file) reads the `KEY=VALUE` lines of a file such as `.env`, ignores blank lines and `#` comments, and sets each value as a GitHub secret. `dry_run=True` prints the `gh` commands and does not run them. `env='prod'` scopes the secrets to the `prod` environment.
 
 ``` python
-# Push all KEY=VALUE pairs from .env as GitHub secrets
 gh_secrets_from_file('.env')
 
-# With dry-run to preview what would be pushed
 gh_secrets_from_file('.env', dry_run=True)
 ```
 
 ## Build a cross-package pipeline
 
-A step can run any shell command, including Python that imports another package. This workflow uses [dockeasy](https://github.com/Karthik777/dockeasy) to write a Dockerfile, then builds the image and pushes it to GHCR, GitHub’s container registry. The `paths` filter means a push only starts it when one of the files that generate the Dockerfile has changed. `workflow_dispatch` adds a button to run it by hand from the repository’s Actions tab, and `with_` sets an action’s inputs.
+A step can run any shell command, including Python that imports another package. This workflow uses [dockeasy](https://github.com/Karthik777/dockeasy) to write a Dockerfile. It then builds the image and pushes it to GHCR, GitHub’s container registry. The `paths` filter starts the workflow on a push only when one of the files that generate the Dockerfile has changed. `workflow_dispatch` adds a button to run the workflow by hand from the repository’s Actions tab. `with_` sets the inputs of an action.
 
 ``` python
 wfb = Workflow("Build caddy-sqlite image")

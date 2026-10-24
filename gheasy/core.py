@@ -113,7 +113,7 @@ _preset = {'python': {}, 'fasthtml': {}, 'rust': {'rust': True}, 'go': {'go': Tr
 'fastapi-react': {'node': True}, 'nodejs': {'node': True}}
 
 def _res_wfs(cfg):
-    "Merge preset defaults with explicit cfg.workflows (explicit always wins); a list of names turns each on."
+    "Merge the preset defaults with `cfg.workflows`. Explicit values win. A list of names turns each one on."
     base = _preset.get(cfg.workflow_preset, {}) if cfg.workflow_preset else {}
     wfs = cfg.workflows or {}
     return {**base, **(dict.fromkeys(wfs, True) if isinstance(wfs, (list, tuple)) else wfs)}
@@ -126,7 +126,8 @@ def mk_deploy_job(env_name, cfg, wfb, cmd=None):
         print(f'Warning: no deploy_cmd configured for {env_name!r} — skipping deploy job. '
               f'Set cfg.deploy_cmd or pass cmd= to mk_deploy_job.')
         return None
-    (wfb.job(f'deploy-{env_name}').runs_on('ubuntu-latest').needs('test').environment(env_name)
+    job = wfb.job(f'deploy-{env_name}', needs='test' if 'test' in wfb._job_map else None)
+    (job.runs_on('ubuntu-latest').environment(env_name)
         .if_(f"github.ref == 'refs/heads/{env.branch}'").checkout().end_step()
         .setup_uv().end_step()
         .step('Deploy SSH key').run(
@@ -168,8 +169,9 @@ def mk_workflow(cfg, *,
     if flags.get('on_pull_request'): wfb.on.pull_request(branches=branches)
     if flags.get('test'): wfb.uv_test_job(**({'test_cmd': cfg.test_cmd} if cfg.test_cmd else {}))
     if flags.get('lint'): wfb.uv_lint_job()
-    if flags.get('publish_pypi'): wfb.uv_pypi_job()
-    if flags.get('docker_build'): wfb.docker_job(cfg.app)
+    after_test = 'test' if flags.get('test') else None
+    if flags.get('publish_pypi'): wfb.uv_pypi_job(needs=after_test)
+    if flags.get('docker_build'): wfb.docker_job(cfg.app, needs=after_test)
     if flags.get('node'): wfb.node_job()
     if flags.get('rust'): wfb.rust_job()
     if flags.get('go'): wfb.go_job()
@@ -283,12 +285,12 @@ def gh_topics(topics, token=None, path='.'):
     api.repos.replace_all_topics(names=[t.lower() for t in topics])
 
 # %% ../nbs/00_core.ipynb #4c7885e278b5f879
-def gh_secret(key, value, env=None, dry_run=False):
-    "Set one GitHub Actions secret with `gh secret set`, scoped to the environment `env` when given."
+def gh_secret(key, value, env=None, dry_run=False, path='.'):
+    "Set one GitHub Actions secret with `gh secret set` for the repository at `path`, scoped to the environment `env` when given."
     cmd = ['gh', 'secret', 'set', key, '--body', value]
     if env: cmd += ['--env', env]
     if dry_run: print(f'[dry-run] {" ".join(cmd)}'); return
-    sp.run(cmd, check=True)
+    sp.run(cmd, check=True, cwd=path)
 
 def gh_push_env(envs, dry_run=False, path='.'):
     "Send each key of `envs` to GitHub as a secret or a variable, as the config's `env_schema` says."
@@ -297,26 +299,26 @@ def gh_push_env(envs, dry_run=False, path='.'):
     schema = cfg.env_schema
     for k in filter_keys(envs, not_(in_(schema))): print(f'Warning: {k} not in env_schema, skipping')
     for k,v in filter_keys(envs, in_(schema)).items():
-         if schema[k] is None: gh_secret(k, v, dry_run=dry_run)
+         if schema[k] is None: gh_secret(k, v, dry_run=dry_run, path=path)
          else:
              cmd = ['gh', 'variable', 'set', k, '--body', v]
              if dry_run: print(f'[dry-run] {" ".join(cmd)}')
-             else: sp.run(cmd, check=True)
+             else: sp.run(cmd, check=True, cwd=path)
 
-def gh_secrets_from_file(env_file='.env', env=None, dry_run=False):
-    "Set every `KEY=VALUE` line in `env_file` as a GitHub secret."
+def gh_secrets_from_file(env_file='.env', env=None, dry_run=False, path='.'):
+    "Set every `KEY=VALUE` line in `env_file` as a secret of the repository at `path`."
     lines = Path(env_file).read_text().splitlines()
     for line in lines:
         line = line.strip()
         if not line or line.startswith('#'): continue
         key, _, value = line.partition('=')
-        gh_secret(key.strip(), value.strip(), env=env, dry_run=dry_run)
+        gh_secret(key.strip(), value.strip(), env=env, dry_run=dry_run, path=path)
 
 # %% ../nbs/00_core.ipynb #961beb9422ea2b84
-def gh_deploy_key_setup(key_path, dry_run=False):
+def gh_deploy_key_setup(key_path, dry_run=False, path='.'):
     "Upload the SSH private key at `key_path` as the `DEPLOY_KEY` secret that deploy jobs use."
     key = Path(key_path).read_text()
-    gh_secret('DEPLOY_KEY', key, dry_run=dry_run)
+    gh_secret('DEPLOY_KEY', key, dry_run=dry_run, path=path)
     if not dry_run: print(f'DEPLOY_KEY set from {key_path}')
 
 # %% ../nbs/00_core.ipynb #ebfd551afe6333bc
@@ -335,14 +337,20 @@ def _resolve_gh_repo_input(ref=None, path='.'):
 
 # %% ../nbs/00_core.ipynb #301398c4
 def _pr_api(path):
-    "`GhApi` bound to this repository's own owner and name, so the calls below need not repeat them."
+    "Return `(api, owner, name)` for this repository, or raise `GitError` when it has no GitHub remote."
     try: owner, name, api = gh_api(token=gh_token(), path=path)
     except ValueError as e: raise GitError(f'this repository has no GitHub remote ({e})') from e
     return api, owner, name
 
 def _checks(api, sha):
     "Check runs for one commit, as counts and the names that are not green."
-    try: runs = api.checks.list_for_ref(sha, per_page=100)['check_runs']
+    runs, page = [], 1
+    try:
+        while True:
+            res = api.checks.list_for_ref(sha, per_page=100, page=page)
+            runs += res['check_runs']
+            if not res['check_runs'] or len(runs) >= res['total_count']: break
+            page += 1
     except Exception: return {}
     bad = [r['name'] for r in runs if r['conclusion'] not in (None, 'success', 'neutral', 'skipped')]
     return {'total': len(runs), 'failing': bad[:12],
@@ -595,7 +603,7 @@ class GheasyRepo:
         gh_lfs(persist=True, path=local_path)
         gh_githooks_pre_commit(path=local_path)
         if workflows: gh_init(repo, '', '', workflows=workflows, path=local_path)
-        if workflows: gh_workflow(token=inst.token, path=local_path)
+        if workflows: gh_workflow(path=local_path)
         sp.run(['git', 'add', '-A'], cwd=local_path, check=True, stdin=sp.DEVNULL)
         sp.run(['git', 'commit', '-m', 'chore: gheasy init'], cwd=local_path, check=True, stdin=sp.DEVNULL)
         sp.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=local_path, check=True, stdin=sp.DEVNULL)
@@ -617,7 +625,9 @@ def _migrate_pyproject_to_hatchling(path='.'):
         changed = True
     name = doc.get('project', {}).get('name', '')
     if name:
-        doc['project']['requires-python'] = ">=3.11"
+        if doc['project'].get('requires-python') != '>=3.11':
+            doc['project']['requires-python'] = '>=3.11'
+            changed = True
         targets = doc.setdefault('tool', {}).setdefault('hatch', {}).setdefault('build', {}).setdefault('targets', {})
         wheel = targets.setdefault('wheel', {})
         if wheel.get('packages') != [name]:

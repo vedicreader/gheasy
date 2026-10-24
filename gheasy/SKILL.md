@@ -17,7 +17,7 @@ wfb.uv_pypi_job(needs="test")
 print(wfb.build().to_yaml())
 ```
 
-The `uv_*_job` presets bundle the usual checkout, setup-uv, install,
+The `uv_*_job` presets add the usual checkout, setup-uv, install,
 and run steps. For anything else, build a job step by step:
 
 ```python
@@ -33,16 +33,16 @@ wfb.job("deploy").needs("test").runs_on("ubuntu-latest")\
 from gheasy.core import GheasyConfig, gh_push_env
 
 cfg = GheasyConfig(app='myapp', env_schema={
-    'PORT': '5001',             # string default → gh variable set
+    'PORT': '5001',             # string default -> gh variable set
     'DOMAIN': 'http://localhost:5001',
-    'JWT_SCRT': None,           # None → gh secret set
+    'JWT_SCRT': None,           # None -> gh secret set
     'RESEND_API_KEY': None,
     'CF_TUNNEL_TOKEN': None,
 })
 cfg.save()
 
 import os
-gh_push_env(dict(os.environ))   # routes each key by schema
+gh_push_env(dict(os.environ))   # sends each key as a secret or variable, by schema
 ```
 
 Keys with `None` schema become GitHub secrets (`gh secret set`).
@@ -64,8 +64,8 @@ from gheasy.core import gh_setup
 gh_setup('myapp', '1.2.3.4', 'myapp.com', deploy_cmd='./deploy.sh')
 ```
 
-Creates `.gheasy/config.json`, writes `.github/workflows/gheasy.yml`,
-and installs `uv run nbdev-prepare` as the pre-commit hook.
+`gh_setup` creates `.gheasy/config.json`, writes `.github/workflows/gheasy.yml`,
+and installs `uv run nbdev_prepare` as the pre-commit hook.
 
 ## git LFS
 
@@ -75,7 +75,7 @@ from gheasy import gh_lfs
 gh_lfs(['*.mp3', '*.png', '*.jpg'], path='.')
 ```
 
-Writes `.gitattributes` LFS tracking patterns and runs `git lfs install`.
+Runs `git lfs install`, then `git lfs track` for each pattern, which writes the patterns to `.gitattributes`. It also saves the patterns to the config.
 
 ## Repo health
 
@@ -86,25 +86,27 @@ findings = gh_check(path='.')
 gh_apply(findings)
 ```
 
-`gh_check` audits: pre-commit hook present, `.gitattributes` LFS block,
-pyproject.toml on hatchling, dependabot config, repo topics.
-`gh_apply` applies the fixes it can.
+`gh_check` checks for a pre-commit hook, an LFS section in `.gitattributes`
+between the comments `# BEGIN gheasy-lfs` and `# END gheasy-lfs`,
+a `pyproject.toml` that uses hatchling, a dependabot config and repo topics.
+The dependabot and topics checks need a GitHub token.
+`gh_apply` runs the fixes that exist. The GitHub findings have no fix.
 
 ## GheasyConfig
 
 ```python
 from gheasy import GheasyConfig
 
-cfg = GheasyConfig.load('.')        # load from .gheasy/config.json
+cfg = GheasyConfig.load('.')        # reads .gheasy/config.json
 cfg.app                              # app name
 cfg.env_schema                       # {key: default_or_None}
 ```
 
 ## Generated workflow
 
-Written to `.github/workflows/gheasy.yml` with a
+`gh_workflow` writes it to `.github/workflows/gheasy.yml` with a
 `# Managed by gheasy — do not edit directly` header.
-Re-run `gh_workflow()` after editing the config to regenerate.
+Edit the config, then run `gh_workflow()` again to regenerate the file.
 
 ## Installing this skill into a repo
 
@@ -114,4 +116,4 @@ mv_skill_md(dry_run=False)
 ```
 
 Copies the bundled `SKILL.md` to `.claude/skills/gheasy/` and `.agents/skills/gheasy/`
-under the repo root so coding agents pick it up. Defaults to `dry_run=True`.
+under the repo root, where coding agents read it. The default is `dry_run=True`.

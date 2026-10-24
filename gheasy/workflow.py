@@ -206,11 +206,11 @@ class StrategyBuilder:
         return self
 
     def include(self, **kwargs) -> "StrategyBuilder":
-        self._include.append(kwargs)
+        self._include.append(_hyphenate(**kwargs))
         return self
 
     def exclude(self, **kwargs) -> "StrategyBuilder":
-        self._exclude.append(kwargs)
+        self._exclude.append(_hyphenate(**kwargs))
         return self
 
     def fail_fast(self, value:bool=True) -> "StrategyBuilder":
@@ -227,11 +227,11 @@ class StrategyBuilder:
     def step(self, name:str) -> StepBuilder: return self._job.step(name)
 
     def _render(self) -> CommentedMap | None:
-        if not self._matrix and self._fail_fast is None: return None
+        if not (self._matrix or self._include or self._exclude) and self._fail_fast is None: return None
         m = CommentedMap()
         if self._fail_fast is not None: m["fail-fast"] = self._fail_fast
         if self._max_parallel is not None: m["max-parallel"] = self._max_parallel
-        if self._matrix:
+        if self._matrix or self._include or self._exclude:
             mat = _to_yaml_val(self._matrix)
             if self._include: mat["include"] = _to_yaml_val(self._include)
             if self._exclude: mat["exclude"] = _to_yaml_val(self._exclude)
@@ -359,10 +359,11 @@ def run_tests(self:JobBuilder, cmd:str="pytest") -> StepBuilder:
     return self.step("Run tests").run(cmd)
 
 @patch
-def setup_uv(self:JobBuilder, version:str|None=None) -> StepBuilder:
-    "Add a step that installs uv with `astral-sh/setup-uv`, pinned to `version` when given."
+def setup_uv(self:JobBuilder, version:str|None=None, python_version:str|None=None) -> StepBuilder:
+    "Add a step that installs uv with `astral-sh/setup-uv`, pinned to `version` and selecting Python `python_version` when given."
     s = self.step('Setup uv').uses('astral-sh/setup-uv@v5')
     if version: s.with_(version=version)
+    if python_version: s.with_(python_version=python_version)
     return s
 
 @patch
@@ -568,7 +569,8 @@ def uv_test_job(self:WorkflowBuilder, test_cmd:str='pytest', needs=None, python_
     "Add a `test` job that installs with uv and runs `uv run test_cmd`, over a matrix of `python_versions` when given."
     job = self.job('test', needs=needs).runs_on('ubuntu-latest')
     if python_versions: job.strategy().matrix(python_version=python_versions).end_strategy()
-    job.checkout().end_step().setup_uv().end_step().uv_install().step('Test').run(f'uv run {test_cmd}').end_job()
+    py = '${{ matrix.python-version }}' if python_versions else None
+    job.checkout().end_step().setup_uv(python_version=py).end_step().uv_install().step('Test').run(f'uv run {test_cmd}').end_job()
     return self
 
 @patch
@@ -581,6 +583,7 @@ def uv_lint_job(self:WorkflowBuilder, lint_cmd:str='uv run ruff check . && uv ru
 @patch
 def uv_pypi_job(self:WorkflowBuilder, needs='test') -> WorkflowBuilder:
     "Add a `publish` job that builds with uv and uploads to PyPI by trusted publishing, only on release events."
+    if 'release' not in self.on._triggers: self.on.release(types=['published'])
     (self.job('publish', needs=needs)
         .runs_on('ubuntu-latest')
         .if_("github.event_name == 'release'")
@@ -670,7 +673,7 @@ def dispatch(self:WorkflowDoc, owner:str, repo:str, ref:str="main",
     from ghapi.all import GhApi
     tok = token or os.environ.get("GITHUB_TOKEN")
     if not tok: raise ValueError("GitHub token required: pass token= or set GITHUB_TOKEN env var")
-    api = GhApi(owner=owner, repo=repo, token=tok)
+    api = GhApi(owner=owner, repo=repo, token=tok, sync=True)
     return api.actions.create_workflow_dispatch(
         workflow_id=f"{self._builder._name}.yml", ref=ref, inputs=inputs or {})
 
@@ -682,7 +685,7 @@ def upload(self:WorkflowDoc, owner:str, repo:str, branch:str="main",
     from ghapi.all import GhApi
     tok = token or os.environ.get("GITHUB_TOKEN")
     if not tok: raise ValueError("GitHub token required: pass token= or set GITHUB_TOKEN env var")
-    api = GhApi(owner=owner, repo=repo, token=tok)
+    api = GhApi(owner=owner, repo=repo, token=tok, sync=True)
     filename = f"{self._builder._name}.yml"
     path = f".github/workflows/{filename}"
     content_b64 = base64.b64encode(self.to_yaml().encode()).decode("ascii")
@@ -700,7 +703,7 @@ def list_runs(self:WorkflowDoc, owner:str, repo:str, token:str|None=None, per_pa
     from ghapi.all import GhApi
     tok = token or os.environ.get("GITHUB_TOKEN")
     if not tok: raise ValueError("GitHub token required")
-    api = GhApi(owner=owner, repo=repo, token=tok)
+    api = GhApi(owner=owner, repo=repo, token=tok, sync=True)
     return api.actions.list_workflow_runs(
         workflow_id=f"{self._builder._name}.yml", per_page=per_page)
 

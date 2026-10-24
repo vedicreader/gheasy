@@ -189,7 +189,7 @@ def run(self:RepoSet, op, paths=()):
 # %% ../nbs/03_repos.ipynb #077db265
 @patch
 def clone(self:RepoSet, urls, into=None):
-    "Clone repositories into an open folder, in parallel, and say where each landed."
+    "Clone repositories into an open folder, in parallel, and return one result row per repository."
     parent = Path(str(into)).expanduser().resolve() if into else (self.roots[0] if self.roots else None)
     if parent is None: raise GitError('open a folder to clone into')
     if not any(parent == r or parent.is_relative_to(r) for r in self.roots): raise GitError(f'{parent} is outside the open folders')

@@ -291,7 +291,7 @@ def undo(self:GitGateway, root, token=''):
                     f'HEAD is back at {point.head[:9]}, but the uncommitted work would not '
                     f'reapply cleanly. It is kept as commit {point.stash[:9]} -- recover it '
                     f'with `git stash apply {point.stash}`.\n\n{applied.stderr.strip()}')
-            restored = point.dirty
+            restored = len(self.out(root, 'diff', '--name-only', f'{point.stash}^1', point.stash).splitlines())
     return {'token': point.token, 'op': point.op, 'head': point.head,
         'branch': point.branch, 'restored': restored, 'describe': point.describe()}
 
@@ -326,11 +326,11 @@ def repo_root(path):
     except (OSError, GitError): return None
 
 def url_name(url):
-    "The folder name a clone of `url` lands in: its last path segment, without `.git`."
+    "The folder name `git clone` gives `url`: its last path segment, without `.git`."
     return re.sub(r'\.git$', '', str(url or '').rstrip('/').rpartition('/')[2])
 
 def clone_target(url, parent, name=''):
-    "Where a clone of `url` would land, refusing anything but a free folder inside `parent`."
+    "The folder a clone of `url` would create in `parent`; raises `GitError` unless that folder is free."
     url = str(url or '').strip()
     if not url or url.startswith('-'): raise GitError(f'not a repository URL: {url or "(empty)"}')
     parent = Path(parent).expanduser().resolve()
@@ -619,9 +619,8 @@ def _changes_uncached(self:GitRepo):
         row['unstaged_stat'] = unstaged.get(row['path'])
         if row['untracked']:
             try:
-                data = (self.root/row['path']).read_bytes()
-                binary = b'\0' in data[:8192]
-                row['unstaged_stat'] = {'additions': None if binary else len(data.decode('utf-8', 'replace').splitlines()),
+                with (self.root/row['path']).open('rb') as f: binary = b'\0' in f.read(8192)
+                row['unstaged_stat'] = {'additions': None if binary else len((self.root/row['path']).read_bytes().decode('utf-8', 'replace').splitlines()),
                     'deletions': None if binary else 0, 'binary': binary}
             except OSError: pass
     return out
@@ -645,9 +644,10 @@ def _blocking_changes(self:GitRepo):
 @patch
 def _in_the_way(self:GitRepo):
     "How much uncommitted work a preview has to warn about, in the shape both previews report."
-    blocking = self._blocking_changes()
+    rows = self.changes()
+    blocking = [c for c in rows if not c.get('untracked')]
     return {'clean': not blocking, 'dirty': [c['path'] for c in blocking][:20],
-        'untracked': sum(1 for c in self.changes() if c.get('untracked'))}
+        'untracked': len(rows) - len(blocking)}
 
 # %% ../nbs/02_repo.ipynb #5a267357
 @patch
@@ -701,7 +701,11 @@ def _guarded(self:GitRepo, op, call, autostash=False):
             failure = e
         finally:
             invalidate(self.root)
-        note = self._bring_back(aside) if aside else ''
+        if aside and (self._operation()['active'] or any(c['conflicted'] for c in self._changes_uncached())):
+            note = (f'Your uncommitted work is held as commit {aside[:9]} until the conflicts are '
+                f'resolved -- reapply it afterwards with `git stash apply {aside}`.')
+        else:
+            note = self._bring_back(aside) if aside else ''
         invalidate(self.root)
         if failure is not None:
             if note:
@@ -1669,12 +1673,17 @@ def _replay(self: GitRepo, onto, commits):
     for n, row in enumerate(commits):
         tree, files, clashed = self._merge_tree(head, row['oid'], self._ask('rev-parse', f'{row["oid"]}^'))
         if clashed: return {'oid': row['short'], 'subject': row['subject']}, n, files
-        # Each result wrapped back into a commit. The next step replays onto what the last left.
         head = _run(self.root, '-c', 'user.name=leela', '-c', 'user.email=leela@localhost',
                     'commit-tree', tree, '-p', head, '-m', row['subject']).stdout.strip() or head
     return None, len(commits), []
 
 # %% ../nbs/02_repo.ipynb #f66cdd5b
+@patch
+def _to_replay(self: GitRepo, theirs, ours):
+    "Every commit in `theirs..ours`, oldest first, with no cap on how many."
+    out = self.run('log', '--reverse', '--format=%H%x00%h%x00%s', f'{theirs}..{ours}')
+    return [dict(zip(('oid', 'short', 'subject'), _fields(line, 3))) for line in out.splitlines()]
+
 @patch
 def divergence(self: GitRepo, upstream='', fetch=False):
     "You against your upstream, every way back rehearsed before any of them runs."
@@ -1684,13 +1693,14 @@ def divergence(self: GitRepo, upstream='', fetch=False):
     ours_oid, theirs_oid = self._resolve_ref('HEAD'), self._resolve_ref(upstream)
     base = self._ask('merge-base', ours_oid, theirs_oid)
     if not base: raise GitError(f'{branch or "HEAD"} and {upstream} do not share a merge base')
-    ours = self.history(limit=250, ref=f'{theirs_oid}..{ours_oid}')
-    theirs = self.history(limit=250, ref=f'{ours_oid}..{theirs_oid}')
-    ahead, behind = len(ours), len(theirs)
+    ahead = int(self._ask('rev-list', '--count', f'{theirs_oid}..{ours_oid}') or 0)
+    behind = int(self._ask('rev-list', '--count', f'{ours_oid}..{theirs_oid}') or 0)
+    ours = self.history(limit=ahead, ref=f'{theirs_oid}..{ours_oid}') if ahead else []
+    theirs = self.history(limit=20, ref=f'{ours_oid}..{theirs_oid}') if behind else []
     relation = ('identical' if ours_oid == theirs_oid else 'behind' if not ahead else
                 'ahead' if not behind else 'diverged')
     conflicts, likely = self._rehearse(ours_oid, theirs_oid)
-    stops, replayed, replay_conflicts = self._replay(theirs_oid, list(reversed(ours)))
+    stops, replayed, replay_conflicts = self._replay(theirs_oid, self._to_replay(theirs_oid, ours_oid))
     blocked = self._in_the_way()
     options = [
         {'op': 'fast-forward', 'available': not ahead and bool(behind), 'destructive': False,
