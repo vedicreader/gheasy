@@ -2,6 +2,9 @@
 
 <!-- do not remove -->
 
+## 0.0.17
+gh create of an existing remote does not error out 
+
 ## 0.0.15
 - `GitRepo.undo` reports `restored` as the number of tracked files in the safepoint's stash. It reported the number of uncommitted files, which includes untracked files that the stash does not hold.
 - `gh_pyproject_to_hatchling` writes `pyproject.toml` and returns `True` when `requires-python` is the only value that changes. It left the file unchanged in that case.

@@ -583,6 +583,9 @@ class GheasyRepo:
     def create(self, private=True, description='', auto_init=False):
         "Create the repo under its owner: an org through `create_in_org`, else the signed-in user."
         api = GhApi(token=self.token or gh_token(), sync=True)
+        owner = self._owner or api.users.get_authenticated().login
+        try: api.repos.get(owner=owner, repo=self._repo); return None
+        except HTTP404NotFoundError: pass
         kw = dict(name=self._repo, private=private, description=description, auto_init=auto_init)
         if self._owner and self._owner.lower() != api.users.get_authenticated().login.lower(): return api.repos.create_in_org(org=self._owner, **kw)
         return api.repos.create_for_authenticated_user(**kw)
