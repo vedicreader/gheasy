@@ -3,11 +3,10 @@
 <!-- do not remove -->
 
 ## 0.0.18
-
 - Git commands that talk to a remote (`clone`, `fetch`, `ls-remote`, `push` and `pull`) run without `GITHUB_TOKEN` and `GH_TOKEN` when `gh` has a keyring login for github.com. The `gh auth git-credential` helper then uses the keyring login. Before, a token that was not valid any more stopped `GitRepo.push` with `Invalid username or token`. gheasy asks `gh auth status` once and keeps the answer for five minutes. With no token variable set, or with no keyring login, nothing changes. `os.environ` never changes. The new `GitGateway.net_env` and `GitGateway.gh_keyring` do this work.
 
 ## 0.0.17
-gh create of an existing remote does not error out 
+gh create of an existing remote does not error out
 
 ## 0.0.15
 - `GitRepo.undo` reports `restored` as the number of tracked files in the safepoint's stash. It reported the number of uncommitted files, which includes untracked files that the stash does not hold.
