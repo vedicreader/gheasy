@@ -7,7 +7,7 @@ Docs: https://vedicreader.github.io/gheasy/repo.html.md"""
 # %% ../nbs/02_repo.ipynb #25e61125
 from __future__ import annotations
 
-import difflib, json, re, shlex, shutil, subprocess, threading, time
+import difflib, json, os, re, shlex, shutil, subprocess, threading, time
 from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -16,10 +16,10 @@ from urllib.parse import urlparse
 from fastcore.all import L, Path, first, patch, uniqueify
 
 # %% auto #0
-__all__ = ['READS', 'NET', 'MIXED', 'BARE_READS', 'FOREIGN_LOCK', 'LOCK_ATTEMPTS', 'LOCK_BACKOFF', 'SAFEPOINT_REF',
-           'JOURNAL_NAME', 'JOURNAL_KEEP', 'LFS_MAGIC', 'SYNC_OPS', 'REMOTE_OPS', 'STATE_KEYS', 'IGNORE_KINDS',
-           'GitError', 'classify', 'RepoLock', 'Safepoint', 'GitGateway', 'gateway', 'repo_root', 'url_name',
-           'clone_target', 'clone', 'invalidate', 'plural', 'shorten', 'unborn', 'GitRepo', 'project_kinds',
+__all__ = ['READS', 'NET', 'MIXED', 'BARE_READS', 'REMOTE', 'FOREIGN_LOCK', 'LOCK_ATTEMPTS', 'LOCK_BACKOFF', 'SAFEPOINT_REF',
+           'JOURNAL_NAME', 'JOURNAL_KEEP', 'TOKEN_VARS', 'LFS_MAGIC', 'SYNC_OPS', 'REMOTE_OPS', 'STATE_KEYS',
+           'IGNORE_KINDS', 'GitError', 'classify', 'RepoLock', 'Safepoint', 'GitGateway', 'gateway', 'repo_root',
+           'url_name', 'clone_target', 'clone', 'invalidate', 'plural', 'shorten', 'unborn', 'GitRepo', 'project_kinds',
            'missing_ignores', 'prepare_ignores']
 
 # %% ../nbs/02_repo.ipynb #cf35dd7c
@@ -50,14 +50,21 @@ MIXED = {
 
 BARE_READS = frozenset({'branch', 'remote', 'tag'})
 
-def classify(args):
-    "Classify a Git argument list as `read`, `write`, or `net`; unknown forms are writes."
+#: Subcommands that talk to a remote, so they get `GitGateway.net_env`
+REMOTE = NET | {'pull'}
+
+def _subcommand(args):
+    "The Git subcommand in `args` after the global options, and the arguments after it; `(None, [])` when there is none."
     rest = [str(a) for a in args]
     while rest and rest[0].startswith('-'):
         if rest[0] in ('-c', '-C', '--git-dir', '--work-tree', '--namespace') and len(rest) > 1: rest = rest[2:]
         else: rest = rest[1:]
-    if not rest: return 'write'
-    sub, rest = rest[0], [a for a in rest[1:] if a]
+    return (rest[0], [a for a in rest[1:] if a]) if rest else (None, [])
+
+def classify(args):
+    "Classify a Git argument list as `read`, `write`, or `net`; unknown forms are writes."
+    sub, rest = _subcommand(args)
+    if sub is None: return 'write'
     if sub in NET: return 'net'
     if sub in READS: return 'read'
     if sub == 'symbolic-ref': return 'write' if len([a for a in rest if not a.startswith('-')]) > 1 else 'read'
@@ -172,6 +179,31 @@ class GitGateway:
         if not parts: return ''
         return shutil.which(parts[0], path=(self.env(cwd) or {}).get('PATH')) or ''
 
+# %% ../nbs/02_repo.ipynb #782090f2
+#: Environment variables that `gh` reads a token from before it reads the keyring
+TOKEN_VARS = ('GITHUB_TOKEN', 'GH_TOKEN')
+
+@patch
+def gh_keyring(self:GitGateway, cwd, ttl=300):
+    "True when `gh` has a keyring login for github.com, asked without `TOKEN_VARS` and cached for `ttl` seconds."
+    def ask():
+        if not (exe := self.resolves(cwd, 'gh')): return False
+        env = {k: v for k, v in (self.env(cwd) or os.environ).items() if k not in TOKEN_VARS}
+        try: p = subprocess.run([exe, 'auth', 'status', '--hostname', 'github.com'], stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True, env=env, timeout=10)
+        except (OSError, subprocess.SubprocessError): return False
+        return not p.returncode and '(keyring)' in p.stdout + p.stderr
+    return self.memo(cwd, 'gh-keyring', ask, ttl=ttl)
+
+@patch
+def net_env(self:GitGateway, cwd):
+    "The environment for a Git command that talks to a remote: `env(cwd)` without `TOKEN_VARS` when `gh` has a keyring login."
+    env = self.env(cwd)
+    base = os.environ if env is None else env
+    if not any(base.get(k) for k in TOKEN_VARS) or not self.gh_keyring(cwd): return env
+    return {k: v for k, v in base.items() if k not in TOKEN_VARS}
+
+
 # %% ../nbs/02_repo.ipynb #5b48817a
 @patch
 def run(self:GitGateway, cwd, *args, check=True, input=None, timeout=30, kind=None):
@@ -189,7 +221,8 @@ def _exec(self:GitGateway, cwd, args, check, input, timeout, kind):
             p = subprocess.run(
                 argv, cwd=str(cwd), input=input, stdin=subprocess.DEVNULL if input is None else None, text=True,
                 encoding='utf-8', errors='replace', stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, timeout=timeout, env=self.env(cwd),
+                stderr=subprocess.PIPE, timeout=timeout,
+                env=self.net_env(cwd) if _subcommand(args)[0] in REMOTE else self.env(cwd),
             )
         except subprocess.TimeoutExpired as e:
             raise GitError(f'git {args[0] if args else "command"} timed out after {timeout}s') from e
