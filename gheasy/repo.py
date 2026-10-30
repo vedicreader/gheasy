@@ -17,10 +17,10 @@ from fastcore.all import L, Path, first, patch, uniqueify
 
 # %% auto #0
 __all__ = ['READS', 'NET', 'MIXED', 'BARE_READS', 'REMOTE', 'FOREIGN_LOCK', 'LOCK_ATTEMPTS', 'LOCK_BACKOFF', 'SAFEPOINT_REF',
-           'JOURNAL_NAME', 'JOURNAL_KEEP', 'TOKEN_VARS', 'LFS_MAGIC', 'SYNC_OPS', 'REMOTE_OPS', 'STATE_KEYS',
-           'IGNORE_KINDS', 'GitError', 'classify', 'RepoLock', 'Safepoint', 'GitGateway', 'gateway', 'repo_root',
-           'url_name', 'clone_target', 'clone', 'invalidate', 'plural', 'shorten', 'unborn', 'GitRepo', 'project_kinds',
-           'missing_ignores', 'prepare_ignores']
+           'JOURNAL_NAME', 'JOURNAL_KEEP', 'TOKEN_VARS', 'HOOK_WAIT', 'LFS_MAGIC', 'SYNC_OPS', 'REMOTE_OPS',
+           'STATE_KEYS', 'IGNORE_KINDS', 'GitError', 'classify', 'RepoLock', 'Safepoint', 'GitGateway', 'gateway',
+           'repo_root', 'url_name', 'clone_target', 'clone', 'invalidate', 'plural', 'shorten', 'unborn', 'GitRepo',
+           'project_kinds', 'missing_ignores', 'prepare_ignores']
 
 # %% ../nbs/02_repo.ipynb #cf35dd7c
 class GitError(RuntimeError): pass
@@ -951,12 +951,14 @@ def delete(self:GitRepo, branch, force=False): self._mutate('branch', '-D' if fo
 def delete_remote(self:GitRepo, remote, branch): self._mutate('push', remote, '--delete', branch, timeout=120)
 
 # %% ../nbs/02_repo.ipynb #95105975
+HOOK_WAIT = 900   #: seconds a commit may take, because a pre-commit hook can run a project's whole test suite
+
 @patch
 def commit(self:GitRepo, message, amend=False):
-    "Commit the staged changes with `message`, or replace the last commit when `amend`."
+    "Commit the staged changes with `message`, or replace the last commit when `amend`. A commit that takes longer than `HOOK_WAIT` seconds raises `GitError`."
     if not message.strip(): raise GitError('a commit message is required')
     args = ['commit', *(['--amend'] if amend else []), '-m', message.strip()]
-    return self._guarded('commit', lambda: self._mutate(*args).strip())
+    return self._guarded('commit', lambda: self._mutate(*args, timeout=HOOK_WAIT).strip())
 
 @patch
 def fetch(self:GitRepo, remote='', prune=True):
