@@ -23,8 +23,8 @@ __all__ = ['DEFAULT_PYTHON', 'FINDING_BRANCH_PROTECTION', 'FINDING_DEPENDABOT', 
            'FINDING_BUILD', 'FINDING_WORKFLOWS', 'app', 'EnvConfig', 'DeployOptions', 'GheasyConfig', 'cfg_path',
            'mk_deploy_job', 'mk_workflow', 'mk_gitattributes', 'mk_dependabot', 'mk_hook', 'nbdev_hook', 'gh_hooks',
            'gh_githooks_pre_commit', 'gh_lfs', 'gh_gitattributes', 'gh_token', 'gh_api', 'gh_protect', 'gh_topics',
-           'gh_secret', 'gh_push_env', 'gh_secrets_from_file', 'gh_deploy_key_setup', 'pr_context', 'gh_init',
-           'gh_add_env', 'gh_add_job', 'gh_workflow', 'gh_status', 'gh_ship', 'gh_record_deploy', 'gh_setup',
+           'gh_repo_info', 'gh_secret', 'gh_push_env', 'gh_secrets_from_file', 'gh_deploy_key_setup', 'pr_context',
+           'gh_init', 'gh_add_env', 'gh_add_job', 'gh_workflow', 'gh_status', 'gh_ship', 'gh_record_deploy', 'gh_setup',
            'RepoFinding', 'gh_check', 'gh_apply', 'GheasyRepo', 'gh_pyproject_to_hatchling', 'repo_root', 'mv_skill_md',
            'gh_new', 'main']
 
@@ -283,6 +283,21 @@ def gh_topics(topics, token=None, path='.'):
     "Replace the repository's topics with `topics`, lowercased as GitHub requires."
     owner, repo, api = gh_api(gh_token(token), path)
     api.repos.replace_all_topics(names=[t.lower() for t in topics])
+
+# %% ../nbs/00_core.ipynb #78bbda5a
+def _status(e):
+    "The HTTP status of a ghapi error: `status_code` in ghapi 2, `code` in ghapi 1."
+    return getattr(e, 'status_code', None) or getattr(e, 'code', None)
+
+def gh_repo_info(owner, name, token=None, timeout=15):
+    "The GitHub repo dict of `owner/name`, or None when it does not exist. On a 401, ask again with no token."
+    tok = gh_token(token)
+    for t in ([tok, None] if tok else [None]):
+        api = GhApi(token=t, authenticate=bool(t), timeout=timeout, sync=True)
+        try: return api.repos.get(owner, name)
+        except Exception as e:
+            if (st := _status(e)) == 404: return None
+            if st != 401 or t is None: raise
 
 # %% ../nbs/00_core.ipynb #4c7885e278b5f879
 def gh_secret(key, value, env=None, dry_run=False, path='.'):

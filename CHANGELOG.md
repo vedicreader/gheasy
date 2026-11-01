@@ -2,6 +2,9 @@
 
 <!-- do not remove -->
 
+## 0.0.20
+- New `gh_repo_info(owner, name, token=None, timeout=15)` gives the GitHub repo dict of any `owner/name` (`private`, `size` in KB, and the rest), with no local checkout. It gives `None` when the repo does not exist. On a 401, for example from an old `GITHUB_TOKEN`, it asks GitHub one more time with no token. Other errors are raised.
+
 ## 0.0.19
 - `GitRepo.commit` waits up to `HOOK_WAIT` (900 s) for the commit. Before, a commit had the 30 s limit of other git commands, so a pre-commit hook that runs the tests, such as `nbdev-prepare`, made each commit fail with `timed out after 30s`. Other commands keep their limits.
 
