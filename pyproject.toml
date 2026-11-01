@@ -16,7 +16,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "ghapi>=1.0.13",
+    "ghapi>=2",
     "tomlkit>=0.14.0",
     "cyclopts>=0.23",
     "pyyaml>=6.0",

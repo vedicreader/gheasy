@@ -1054,7 +1054,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cyclopts", specifier = ">=0.23" },
-    { name = "ghapi", specifier = ">=1.0.13" },
+    { name = "ghapi", specifier = ">=2" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "tomlkit", specifier = ">=0.14.0" },
