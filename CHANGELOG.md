@@ -2,6 +2,9 @@
 
 <!-- do not remove -->
 
+## 0.0.21
+- Each `GitRepo` method puts `--end-of-options` before the refs, revisions, branch, tag and remote names, and worktree paths that its caller gives. Git now reads a value such as `--output=<file>` as a name, not as an option. Before, `history(ref='--output=<file>')`, `commit_detail` and `diff` wrote Git's output over that file. `history` still takes `--all`, its default, in `ref`.
+
 ## 0.0.20
 - New `gh_repo_info(owner, name, token=None, timeout=15)` gives the GitHub repo dict of any `owner/name` (`private`, `size` in KB, and the rest), with no local checkout. It gives `None` when the repo does not exist. On a 401, for example from an old `GITHUB_TOKEN`, it asks GitHub one more time with no token. Other errors are raised.
 - gheasy now needs ghapi 2. Its calls with `sync=True` already used it.

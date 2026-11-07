@@ -892,16 +892,16 @@ def apply_patch(self:GitRepo, patch, staged=True, reverse=False):
 # %% ../nbs/02_repo.ipynb #4dc71eb2
 @patch
 def _has_ref(self:GitRepo, ref):
-    return not _run(self.root, 'show-ref', '--verify', '--quiet', ref, check=False).returncode
+    return not _run(self.root, 'show-ref', '--verify', '--quiet', '--end-of-options', ref, check=False).returncode
 
 @patch
 def _switch(self:GitRepo, branch):
     local = branch.partition('/')[2]
     if not self._has_ref(f'refs/remotes/{branch}'):
-        self._mutate('switch', branch)
+        self._mutate('switch', '--end-of-options', branch)
     elif self._has_ref(f'refs/heads/{local}'):
-        self._mutate('switch', local)
-        self._mutate('branch', f'--set-upstream-to={branch}', local)
+        self._mutate('switch', '--end-of-options', local)
+        self._mutate('branch', f'--set-upstream-to={branch}', '--end-of-options', local)
     else:
         self._mutate('switch', '--track', branch)
     return ''
@@ -933,22 +933,22 @@ def checkout(self:GitRepo, branch):
 
 # %% ../nbs/02_repo.ipynb #b79111f8
 @patch
-def create(self:GitRepo, branch, start='HEAD'): self._mutate('switch', '-c', branch, start)
+def create(self:GitRepo, branch, start='HEAD'): self._mutate('switch', '-c', branch, '--end-of-options', start)
 
 @patch
-def rename_branch(self:GitRepo, old, new): self._mutate('branch', '-m', old, new)
+def rename_branch(self:GitRepo, old, new): self._mutate('branch', '-m', '--end-of-options', old, new)
 
 @patch
-def set_upstream(self:GitRepo, branch, upstream): self._mutate('branch', f'--set-upstream-to={upstream}', branch)
+def set_upstream(self:GitRepo, branch, upstream): self._mutate('branch', f'--set-upstream-to={upstream}', '--end-of-options', branch)
 
 @patch
-def unset_upstream(self:GitRepo, branch): self._mutate('branch', '--unset-upstream', branch)
+def unset_upstream(self:GitRepo, branch): self._mutate('branch', '--unset-upstream', '--end-of-options', branch)
 
 @patch
-def delete(self:GitRepo, branch, force=False): self._mutate('branch', '-D' if force else '-d', branch)
+def delete(self:GitRepo, branch, force=False): self._mutate('branch', '-D' if force else '-d', '--end-of-options', branch)
 
 @patch
-def delete_remote(self:GitRepo, remote, branch): self._mutate('push', remote, '--delete', branch, timeout=120)
+def delete_remote(self:GitRepo, remote, branch): self._mutate('push', '--delete', '--end-of-options', remote, branch, timeout=120)
 
 # %% ../nbs/02_repo.ipynb #95105975
 HOOK_WAIT = 900   #: seconds a commit may take, because a pre-commit hook can run a project's whole test suite
@@ -963,8 +963,8 @@ def commit(self:GitRepo, message, amend=False):
 @patch
 def fetch(self:GitRepo, remote='', prune=True):
     "Fetch from `remote`, or from every remote, pruning deleted branches when `prune`."
-    args = ['fetch', remote] if remote else ['fetch', '--all']
-    if prune: args.append('--prune')
+    args = ['fetch', *(['--prune'] if prune else [])]
+    args += ['--end-of-options', remote] if remote else ['--all']
     return self._mutate(*args, timeout=120).strip()
 
 @patch
@@ -993,15 +993,15 @@ def stash(self:GitRepo, message=''): return self._mutate('stash', 'push', '-u', 
 @patch
 def stash_pop(self:GitRepo, ref='stash@{0}'):
     "Reapply the stash `ref` and remove it from the stash list."
-    return self._guarded('stash pop', lambda: self._attempt('stash', 'pop', ref))
+    return self._guarded('stash pop', lambda: self._attempt('stash', 'pop', '--end-of-options', ref))
 
 @patch
 def stash_apply(self:GitRepo, ref='stash@{0}'):
     "Reapply the stash `ref` and keep it in the stash list."
-    return self._guarded('stash apply', lambda: self._attempt('stash', 'apply', ref))
+    return self._guarded('stash apply', lambda: self._attempt('stash', 'apply', '--end-of-options', ref))
 
 @patch
-def stash_drop(self:GitRepo, ref='stash@{0}'): return self._mutate('stash', 'drop', ref).strip()
+def stash_drop(self:GitRepo, ref='stash@{0}'): return self._mutate('stash', 'drop', '--end-of-options', ref).strip()
 
 # %% ../nbs/02_repo.ipynb #5d583a96
 @patch
@@ -1012,29 +1012,29 @@ def merge(self:GitRepo, branch, strategy='merge'):
     args = ['merge', '--no-edit']
     if strategy == 'squash': args.append('--squash')
     elif strategy == 'ff-only': args.append('--ff-only')
-    return self._guarded('merge', lambda: self._attempt(*args, branch), autostash=True)
+    return self._guarded('merge', lambda: self._attempt(*args, '--end-of-options', branch), autostash=True)
 
 @patch
 def rebase(self:GitRepo, branch):
     "Replay this branch's commits on top of `branch`."
-    return self._guarded('rebase', lambda: self._attempt('rebase', '--autostash', branch))
+    return self._guarded('rebase', lambda: self._attempt('rebase', '--autostash', '--end-of-options', branch))
 
 @patch
 def cherry_pick(self:GitRepo, ref):
     "Apply the commit `ref` on top of the current branch."
-    return self._guarded('cherry-pick', lambda: self._attempt('cherry-pick', ref))
+    return self._guarded('cherry-pick', lambda: self._attempt('cherry-pick', '--end-of-options', ref))
 
 @patch
 def revert(self:GitRepo, ref):
     "Add a commit that undoes the commit `ref`."
-    return self._guarded('revert', lambda: self._attempt('revert', '--no-edit', ref))
+    return self._guarded('revert', lambda: self._attempt('revert', '--no-edit', '--end-of-options', ref))
 
 @patch
 def reset(self:GitRepo, ref='HEAD', mode='mixed'):
     "Move the branch to `ref`, keeping changes staged (`soft`), unstaged (`mixed`) or discarding them (`hard`)."
     if mode not in {'soft', 'mixed', 'hard'}:
         raise GitError('reset mode must be soft, mixed, or hard')
-    return self._guarded('reset', lambda: self._mutate('reset', f'--{mode}', ref).strip())
+    return self._guarded('reset', lambda: self._mutate('reset', f'--{mode}', '--end-of-options', ref).strip())
 
 @patch
 def operation_action(self:GitRepo, action):
@@ -1056,25 +1056,25 @@ def tag(self:GitRepo, name, message='', ref='HEAD'):
     if not name.strip(): raise GitError('a tag name is required')
     args = ['tag']
     if message.strip():
-        args += ['-a', name.strip(), '-m', message.strip(), ref]
+        args += ['-a', '-m', message.strip(), '--end-of-options', name.strip(), ref]
     else:
-        args += [name.strip(), ref]
+        args += ['--end-of-options', name.strip(), ref]
     return self._mutate(*args).strip()
 
 @patch
 def delete_tag(self:GitRepo, name, remote=''):
     "Delete the tag `name`, and on `remote` too when given."
-    self._mutate('tag', '-d', name)
+    self._mutate('tag', '-d', '--end-of-options', name)
     if remote: self._mutate('push', remote, f':refs/tags/{name}', timeout=120)
 
 @patch
-def add_remote(self:GitRepo, name, url): self._mutate('remote', 'add', name, url)
+def add_remote(self:GitRepo, name, url): self._mutate('remote', 'add', '--end-of-options', name, url)
 
 @patch
-def set_remote(self:GitRepo, name, url, push=False): self._mutate('remote', 'set-url', *(['--push'] if push else []), name, url)
+def set_remote(self:GitRepo, name, url, push=False): self._mutate('remote', 'set-url', *(['--push'] if push else []), '--end-of-options', name, url)
 
 @patch
-def remove_remote(self:GitRepo, name): self._mutate('remote', 'remove', name)
+def remove_remote(self:GitRepo, name): self._mutate('remote', 'remove', '--end-of-options', name)
 
 # %% ../nbs/02_repo.ipynb #4330cf87
 _POOL, _POOL_LOCK, _POOL_NAME = None, threading.Lock(), 'gheasy-info'
@@ -1173,8 +1173,9 @@ def history(self:GitRepo, limit=100, skip=0, query='', ref='--all', path=''):
     "Commits newest first, filtered by `ref`, `query` and `path`, `limit` at a time."
     limit, skip = max(1, min(int(limit), 500)), max(0, int(skip))
     fmt = '%H%x00%h%x00%P%x00%an%x00%ae%x00%at%x00%D%x00%G?%x00%s'
-    args = ['log', ref, f'--max-count={limit}', f'--skip={skip}', f'--format={fmt}']
+    args = ['log', f'--max-count={limit}', f'--skip={skip}', f'--format={fmt}']
     if query: args += ['--regexp-ignore-case', f'--grep={query}']
+    args += ['--all'] if ref == '--all' else ['--end-of-options', ref]
     if path: args += ['--', path]
     rows = []
     for line in self.run(*args).splitlines():
@@ -1199,10 +1200,10 @@ def reflog(self:GitRepo, limit=100):
 @patch
 def commit_detail(self:GitRepo, ref):
     "One commit's metadata, full message and patch."
-    meta = self.run('show', '-s', '--format=%H%x00%h%x00%P%x00%an%x00%ae%x00%at%x00%D%x00%B', ref)
+    meta = self.run('show', '-s', '--format=%H%x00%h%x00%P%x00%an%x00%ae%x00%at%x00%D%x00%B', '--end-of-options', ref)
     (oid, short, parents, author, email,
         stamp, decoration, message) = _fields(meta.rstrip('\n'), 8)
-    patch = self.run('show', '--format=', '--no-ext-diff', '--stat', '--patch', ref)
+    patch = self.run('show', '--format=', '--no-ext-diff', '--stat', '--patch', '--end-of-options', ref)
     return {'oid': oid, 'short': short, 'parents': parents.split(), 'author': author,
         'email': email, 'timestamp': int(stamp or 0), 'decoration': decoration,
         'message': message.strip(), 'patch': patch}
@@ -1221,8 +1222,8 @@ def _resolve_ref(self:GitRepo, ref):
 @patch
 def _diff_files(self:GitRepo, left, right):
     "Per-file records for one comparison: rename-aware, with line counts merged in."
-    rows = _diff_status(self.run('diff', '--name-status', '-z', '-M', left, right, '--'))
-    stats = _diff_numstat(self.run('diff', '--numstat', '-z', '-M', left, right, '--'))
+    rows = _diff_status(self.run('diff', '--name-status', '-z', '-M', '--end-of-options', left, right, '--'))
+    stats = _diff_numstat(self.run('diff', '--numstat', '-z', '-M', '--end-of-options', left, right, '--'))
     for row in rows:
         row.update(stats.get(row['path'], {'additions': 0, 'deletions': 0, 'binary': False}))
     return rows
@@ -1231,7 +1232,7 @@ def _diff_files(self:GitRepo, left, right):
 def _merge_tree(self:GitRepo, ours, theirs, base=''):
     "One in-memory merge: the tree it wrote, the files that would conflict, and whether any do."
     args = ['merge-tree', '--write-tree', '--name-only', *([f'--merge-base={base}'] if base else [])]
-    r = _run(self.root, *args, ours, theirs, check=False)
+    r = _run(self.root, *args, '--end-of-options', ours, theirs, check=False)
     lines = r.stdout.splitlines()
     tree = lines[0].strip() if lines else ''
     if not r.returncode: return tree, [], False
@@ -1285,13 +1286,13 @@ def review(self:GitRepo, base, head, mode='review'):
 @patch
 def _ref_file(self:GitRepo, ref, path):
     if not ref or not path: return ''
-    result = _run(self.root, 'show', f'{ref}:{path}', check=False)
+    result = _run(self.root, 'show', '--end-of-options', f'{ref}:{path}', check=False)
     return result.stdout if result.returncode == 0 else ''
 
 @patch
 def _file_pair(self:GitRepo, path, base, head, from_label, to_label, context, old_path=''):
     "Both sides of one file between two commits, and the patch between them."
-    patch = self.run('diff', '--no-ext-diff', _unified_arg(context), '-M', base, head, '--', path)
+    patch = self.run('diff', '--no-ext-diff', _unified_arg(context), '-M', '--end-of-options', base, head, '--', path)
     left = self._ref_file(base, old_path or path)
     right = self._ref_file(head, path)
     return self._side_by_side(path, left, right, from_label, to_label, patch)
@@ -1368,7 +1369,7 @@ def rebase_preview(self:GitRepo, onto):
 def compare(self:GitRepo, left, right):
     "Compare the complete snapshots at two refs, from `left` to `right`."
     review = self.review(left, right, 'snapshot')
-    patch = self.run('diff', '--no-ext-diff', '--stat', '--patch',
+    patch = self.run('diff', '--no-ext-diff', '--stat', '--patch', '--end-of-options',
         review['base_oid'], review['head_oid'], '--')
     return {'left': left, 'right': right, 'left_only': review['base_only'],
         'right_only': review['head_only'],
@@ -1497,14 +1498,14 @@ def add_worktree(self:GitRepo, path, branch='', create=False):
     "Check out `branch` in a new worktree at `path`, creating the branch when `create`."
     args = ['worktree', 'add']
     if create and branch: args += ['-b', branch]
-    args += [path]
+    args += ['--end-of-options', path]
     if branch and not create: args.append(branch)
     return self._mutate(*args).strip()
 
 @patch
 def remove_worktree(self:GitRepo, path, force=False):
     "Remove the worktree at `path`, even with uncommitted changes when `force`."
-    return self._mutate('worktree', 'remove', *(['--force'] if force else []), path).strip()
+    return self._mutate('worktree', 'remove', *(['--force'] if force else []), '--end-of-options', path).strip()
 
 @patch
 def submodules(self:GitRepo):
@@ -1526,8 +1527,8 @@ def diff(self:GitRepo, path='', staged=False, left='', right='', context=3):
     "The `git diff` text for unstaged changes, staged ones, or between refs, for one `path` when given."
     args = ['diff', '--no-ext-diff', _unified_arg(context)]
     if staged: args.append('--cached')
-    if left and right: args.append(f'{left}...{right}')
-    elif left: args.append(left)
+    if left and right: args += ['--end-of-options', f'{left}...{right}']
+    elif left: args += ['--end-of-options', left]
     if path: args += ['--', path]
     return self.run(*args)
 
